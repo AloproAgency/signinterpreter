@@ -1,5 +1,4 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useApp } from '../lib/context';
 import { api } from '../lib/api';
 import {
   Search, X, AlertTriangle,

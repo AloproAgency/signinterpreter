@@ -5,12 +5,12 @@ import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useApp } from '../lib/context';
 import {
   Video, Wifi, WifiOff, Trash2, Hand, Activity,
-  Copy, Settings2, X, Maximize, Minimize,
+  Copy, Settings2, Maximize, Minimize,
   ChevronRight, Zap,
 } from 'lucide-react';
 
 export default function InferencePage() {
-  const { videoRef, canvasRef, active, start, stop, captureFrame } = useWebcam();
+  const { videoRef, canvasRef, active, start, captureFrame } = useWebcam();
   const {
     connected, status, prediction, sentence, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold,

@@ -118,7 +118,6 @@ export default function ContributionPage() {
   // Reference video
   const [hasReference, setHasReference] = useState(false);
   const [referenceUrl, setReferenceUrl] = useState('');
-  const videoRefElement = useRef<HTMLVideoElement>(null);
 
   // Landmarks overlay
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -295,9 +294,7 @@ export default function ContributionPage() {
     return () => clearTimeout(timer);
   }, [currentSequence, batchRunning, totalSequences, startSingleRecording, currentWord, addToast]);
 
-  const stopRecording = () => {
-    wsRef.current?.send(JSON.stringify({ action: 'stop' }));
-  };
+  // stopRecording is handled automatically when buffer is full
 
   const cancelBatch = () => {
     batchAbortRef.current = true;
