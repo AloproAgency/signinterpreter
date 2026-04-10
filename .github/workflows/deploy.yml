@@ -1,0 +1,247 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Build frontend
+        run: |
+          cd client
+          npm ci
+          npm run build
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p .deploy_tmp
+
+          # ML code
+          cp -R ml .deploy_tmp/ml
+
+          # Server code
+          cp -R server .deploy_tmp/server
+
+          # Frontend build
+          cp -R client/dist .deploy_tmp/client_dist
+
+          # Config files
+          cp requirements.txt .deploy_tmp/
+          cp start.sh .deploy_tmp/
+
+          # Data placeholders
+          mkdir -p .deploy_tmp/data/templates
+          mkdir -p .deploy_tmp/data/contributions
+
+          # Create production start script
+          cat > .deploy_tmp/run.sh <<'RUNEOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$(dirname "$0")"
+
+          export PORT="${PORT:-8090}"
+
+          # Activate venv
+          if [ -d "venv" ]; then
+            source venv/bin/activate
+          fi
+
+          # Serve frontend from FastAPI static files
+          exec python -m uvicorn server.main:app --host 0.0.0.0 --port $PORT --workers 1
+          RUNEOF
+          chmod +x .deploy_tmp/run.sh
+
+          # Create setup script for first deploy
+          cat > .deploy_tmp/setup.sh <<'SETUPEOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          cd "$(dirname "$0")"
+
+          echo "[INFO] Setting up Python virtual environment..."
+          python3 -m venv venv || python3.11 -m venv venv
+          source venv/bin/activate
+
+          echo "[INFO] Installing Python dependencies..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+          echo "[INFO] Setup complete."
+          SETUPEOF
+          chmod +x .deploy_tmp/setup.sh
+
+          COPYFILE_DISABLE=1 tar -czf release.tar.gz -C .deploy_tmp .
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Upload artifact
+        run: scp -o StrictHostKeyChecking=no release.tar.gz root@${{ secrets.SERVER_HOST }}:/tmp/signinterpreter-release.tar.gz
+
+      - name: Deploy on server
+        run: |
+          ssh -o StrictHostKeyChecking=no -T root@${{ secrets.SERVER_HOST }} bash <<'EOF'
+          set -Eeuo pipefail
+
+          APP_USER="alopro-signinterpreter"
+          APP_BASE="/home/$APP_USER/htdocs/signinterpreter.alopro.net"
+          RELEASES_DIR="$APP_BASE/releases"
+          SHARED_DIR="$APP_BASE/shared"
+          CURRENT_LINK="$APP_BASE/current"
+          ARCHIVE="/tmp/signinterpreter-release.tar.gz"
+          SERVICE_NAME="signinterpreter"
+          APP_PORT=8090
+          TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+          NEW_RELEASE="$RELEASES_DIR/$TIMESTAMP"
+
+          PREVIOUS_RELEASE=""
+          if [ -L "$CURRENT_LINK" ]; then
+            PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
+          fi
+
+          rollback() {
+            echo "[ERR] Deploy failed. Rolling back..."
+            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+              ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+              systemctl restart "$SERVICE_NAME" || true
+            fi
+            exit 1
+          }
+          trap rollback ERR
+
+          echo "[INFO] Preparing directories..."
+          mkdir -p "$RELEASES_DIR" "$SHARED_DIR/data/templates" "$SHARED_DIR/data/contributions" "$NEW_RELEASE"
+
+          echo "[INFO] Extracting archive..."
+          tar -xzf "$ARCHIVE" -C "$NEW_RELEASE"
+
+          echo "[INFO] Linking shared data..."
+          rm -rf "$NEW_RELEASE/data/templates" "$NEW_RELEASE/data/contributions"
+          ln -sfn "$SHARED_DIR/data/templates" "$NEW_RELEASE/data/templates"
+          ln -sfn "$SHARED_DIR/data/contributions" "$NEW_RELEASE/data/contributions"
+
+          # Link shared files (index, metadata, db)
+          for f in faiss.index metadata.json; do
+            if [ -f "$SHARED_DIR/data/$f" ]; then
+              ln -sfn "$SHARED_DIR/data/$f" "$NEW_RELEASE/data/$f"
+            fi
+          done
+          if [ -f "$SHARED_DIR/signinterpreter.db" ]; then
+            ln -sfn "$SHARED_DIR/signinterpreter.db" "$NEW_RELEASE/server/signinterpreter.db"
+          fi
+
+          # Move frontend build to where FastAPI expects it
+          if [ -d "$NEW_RELEASE/client_dist" ]; then
+            mkdir -p "$NEW_RELEASE/client"
+            mv "$NEW_RELEASE/client_dist" "$NEW_RELEASE/client/dist"
+          fi
+
+          echo "[INFO] Setting up Python environment..."
+          # Reuse venv from shared if exists, otherwise create
+          if [ -d "$SHARED_DIR/venv" ]; then
+            ln -sfn "$SHARED_DIR/venv" "$NEW_RELEASE/venv"
+          else
+            cd "$NEW_RELEASE"
+            bash setup.sh
+            # Move venv to shared for reuse
+            mv "$NEW_RELEASE/venv" "$SHARED_DIR/venv"
+            ln -sfn "$SHARED_DIR/venv" "$NEW_RELEASE/venv"
+          fi
+
+          # Check if deps changed and update
+          cd "$NEW_RELEASE"
+          source venv/bin/activate
+          pip install -q -r requirements.txt 2>/dev/null || true
+
+          echo "[INFO] Setting permissions..."
+          chown -R "$APP_USER:$APP_USER" "$NEW_RELEASE" "$SHARED_DIR" || true
+          chmod +x "$NEW_RELEASE/run.sh" "$NEW_RELEASE/start.sh" || true
+
+          # Create systemd service if not exists
+          if [ ! -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+            echo "[INFO] Creating systemd service..."
+            cat > "/etc/systemd/system/$SERVICE_NAME.service" <<SVCEOF
+          [Unit]
+          Description=SignInterpreter V8
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=$APP_USER
+          Group=$APP_USER
+          WorkingDirectory=$APP_BASE/current
+          ExecStart=$APP_BASE/current/run.sh
+          Restart=always
+          RestartSec=5
+          Environment=PORT=$APP_PORT
+          Environment=ADMIN_PASSWORD=12345678
+
+          [Install]
+          WantedBy=multi-user.target
+          SVCEOF
+            systemctl daemon-reload
+            systemctl enable "$SERVICE_NAME"
+          fi
+
+          echo "[INFO] Stopping service..."
+          systemctl stop "$SERVICE_NAME" || true
+          sleep 2
+
+          echo "[INFO] Releasing port $APP_PORT..."
+          fuser -k "$APP_PORT"/tcp 2>/dev/null || true
+          sleep 1
+
+          echo "[INFO] Activating new release..."
+          ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+          chown -h "$APP_USER:$APP_USER" "$CURRENT_LINK" || true
+
+          # Update systemd WorkingDirectory (it follows the symlink)
+          systemctl daemon-reload
+
+          echo "[INFO] Starting service..."
+          systemctl restart "$SERVICE_NAME"
+          sleep 5
+
+          echo "[INFO] Healthcheck..."
+          for i in {1..20}; do
+            if (echo > /dev/tcp/127.0.0.1/$APP_PORT) 2>/dev/null; then
+              echo "[OK] Port $APP_PORT is up (attempt $i)."
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "[ERR] Healthcheck failed"
+              journalctl -u "$SERVICE_NAME" -n 30 --no-pager || true
+              exit 1
+            fi
+            sleep 3
+          done
+
+          echo "[INFO] Cleaning old releases..."
+          cd "$RELEASES_DIR"
+          ls -1dt */ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+          rm -f "$ARCHIVE"
+
+          echo "[OK] Deploy successful."
+          echo "Release: $(readlink -f "$CURRENT_LINK")"
+          echo "URL: https://signinterpreter.alopro.net"
+          EOF
+
+      - name: Cleanup
+        if: always()
+        run: rm -f release.tar.gz && rm -rf .deploy_tmp
