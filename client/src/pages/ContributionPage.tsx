@@ -4,7 +4,7 @@ import { useApp } from '../lib/context';
 import { api } from '../lib/api';
 import {
   Video, Circle, Square, CheckCircle, AlertCircle,
-  Play, RotateCcw, ChevronRight,
+  Play, RotateCcw,
 } from 'lucide-react';
 import type { WordInfo } from '../lib/types';
 
