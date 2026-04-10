@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Data (user-specific, not committed)
+data/templates/
+data/contributions/
+data/faiss.index
+data/metadata.json
+
+# Database
+server/signinterpreter.db
+
+# Node
+client/node_modules/
+client/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

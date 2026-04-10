@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+python-multipart
+websockets
+mediapipe==0.10.14
+tensorflow==2.16.2
+opencv-python
+numpy
+scikit-learn
+faiss-cpu
+fastdtw
+scipy
