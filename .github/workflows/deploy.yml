@@ -211,6 +211,13 @@ jobs:
           ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
           chown -h "$APP_USER:$APP_USER" "$CURRENT_LINK" || true
 
+          # Create symlinks for static assets (nginx serves them directly)
+          cd "$APP_BASE"
+          ln -sfn current/client/dist/assets assets
+          ln -sfn current/client/dist/favicon.svg favicon.svg
+          ln -sfn current/client/dist/icons.svg icons.svg
+          chown -h "$APP_USER:$APP_USER" assets favicon.svg icons.svg || true
+
           # Update systemd WorkingDirectory (it follows the symlink)
           systemctl daemon-reload
 
