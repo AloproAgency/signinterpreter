@@ -55,7 +55,7 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
         if (blob && wsRef.current?.readyState === WebSocket.OPEN) {
           blob.arrayBuffer().then(buf => wsRef.current?.send(buf));
         }
-      }, 1000 / 15);
+      }, 1000 / 8); // 8 FPS (reduced for network latency)
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);

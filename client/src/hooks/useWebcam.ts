@@ -35,8 +35,8 @@ export function useWebcam() {
     const canvas = canvasRef.current;
     if (!video || !canvas || !active) return null;
 
-    // Square crop from center of video (480x480 from 640x480)
-    const size = 480;
+    // Square crop from center of video (320x320 for faster network transfer)
+    const size = 320;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
@@ -48,7 +48,7 @@ export function useWebcam() {
     ctx.drawImage(video, sx, 0, video.videoHeight, video.videoHeight, 0, 0, size, size);
 
     // Convert to JPEG blob synchronously via toBlob workaround
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
     const binary = atob(dataUrl.split(',')[1]);
     const array = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
