@@ -211,6 +211,9 @@ jobs:
           ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
           chown -h "$APP_USER:$APP_USER" "$CURRENT_LINK" || true
 
+          # Symlink SL reference dataset so the app can find it
+          ln -sfn "$APP_BASE/SL" "$RELEASES_DIR/SL" 2>/dev/null || true
+
           # Create symlinks for static assets (nginx serves them directly)
           cd "$APP_BASE"
           ln -sfn current/client/dist/assets assets
