@@ -35,8 +35,8 @@ export function useWebcam() {
     const canvas = canvasRef.current;
     if (!video || !canvas || !active) return null;
 
-    // Square crop from center of video (320x320 for faster network transfer)
-    const size = 320;
+    // Square crop from center of video (400x400 balance between quality and speed)
+    const size = 400;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
