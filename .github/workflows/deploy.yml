@@ -142,6 +142,13 @@ jobs:
               ln -sfn "$SHARED_DIR/data/$f" "$NEW_RELEASE/data/$f"
             fi
           done
+
+          # Link sentence model (large .keras files stored in shared)
+          if [ -d "$SHARED_DIR/data/sentence_model" ]; then
+            for f in "$SHARED_DIR/data/sentence_model"/*.keras; do
+              [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/sentence_model/$(basename $f)"
+            done
+          fi
           if [ -f "$SHARED_DIR/signinterpreter.db" ]; then
             ln -sfn "$SHARED_DIR/signinterpreter.db" "$NEW_RELEASE/server/signinterpreter.db"
           fi
