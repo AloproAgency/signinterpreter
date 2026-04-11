@@ -10,6 +10,8 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
   });
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [sentence, setSentence] = useState<string[]>([]);
+  const [translated, setTranslated] = useState('');
+  const [phrases, setPhrases] = useState<string[]>([]);
   const [lastAddedIndex, setLastAddedIndex] = useState(-1);
 
   const connect = useCallback(() => {
@@ -33,6 +35,8 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
           }
           return data.sentence;
         });
+        if (data.translated !== undefined) setTranslated(data.translated);
+        if (data.phrases !== undefined) setPhrases(data.phrases);
       }
     };
   }, []);
@@ -63,6 +67,8 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
       wsRef.current.send(JSON.stringify({ action: 'clear_sentence' }));
     }
     setSentence([]);
+    setTranslated('');
+    setPhrases([]);
     setLastAddedIndex(-1);
   }, []);
 
@@ -73,7 +79,7 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
   }, []);
 
   return {
-    connected, status, prediction, sentence, lastAddedIndex,
+    connected, status, prediction, sentence, translated, phrases, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold,
   };
 }

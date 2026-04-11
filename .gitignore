@@ -12,6 +12,8 @@ data/templates/
 data/contributions/
 data/faiss.index
 data/metadata.json
+data/sentence_model/*.keras
+data/training_pairs.csv
 
 # Database
 server/signinterpreter.db

@@ -274,6 +274,24 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 # ============================================================
+# TRANSLATION
+# ============================================================
+class TranslateRequest(BaseModel):
+    signs: str  # space-separated sign words
+
+@router.post('/translate')
+def translate_signs(data: TranslateRequest):
+    """Translate sign words to a French sentence."""
+    from ml.translator import get_translator
+    translator = get_translator()
+    signs_list = data.signs.strip().split()
+    if not signs_list:
+        return {'signs': '', 'sentence': ''}
+    sentence = translator.translate(signs_list)
+    return {'signs': data.signs, 'sentence': sentence}
+
+
+# ============================================================
 # REFERENCE VIDEOS
 # ============================================================
 @router.get('/reference/{word_name}')

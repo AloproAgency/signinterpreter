@@ -31,6 +31,10 @@ export const api = {
   deleteContribution: (id: number) =>
     request(`/contributions/${id}`, { method: 'DELETE' }),
 
+  // Translation
+  translate: (signs: string) =>
+    request('/translate', { method: 'POST', body: JSON.stringify({ signs }) }),
+
   // Contribution video preview
   getContributionVideoUrl: (id: number) => `${BASE}/contributions/${id}/video`,
 

@@ -1,0 +1,8 @@
+{
+  "sign_vocab_size": 2994,
+  "sent_vocab_size": 5662,
+  "max_sign_len": 9,
+  "max_sent_len": 13,
+  "embedding_dim": 128,
+  "hidden_dim": 256
+}

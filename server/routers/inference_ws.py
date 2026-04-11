@@ -6,12 +6,14 @@ import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ml.mediapipe_service import MediaPipeService
 from ml.inference_engine import InferenceEngine, SignSegmenter
+from ml.translator import get_translator
 from ml.constants import THRESHOLD
 
 router = APIRouter()
 
-# Shared inference engine (loaded once)
 engine = InferenceEngine()
+
+PAUSE_THRESHOLD = 2.0  # seconds without hand = new sentence
 
 
 def get_engine():
@@ -27,8 +29,14 @@ async def inference_websocket(ws: WebSocket):
     mp_service = MediaPipeService()
     segmenter = SignSegmenter()
     eng = get_engine()
-    sentence = []
+    translator = get_translator()
+
+    # State
+    current_signs = []        # signs for the current phrase being built
+    completed_phrases = []    # list of translated phrases (finalized)
     threshold = THRESHOLD
+    last_hand_time = time.time()
+    hand_was_visible = False
 
     try:
         while True:
@@ -40,13 +48,19 @@ async def inference_websocket(ws: WebSocket):
             if data.get('type') == 'websocket.disconnect':
                 break
 
-            # Handle JSON messages (commands)
+            # JSON commands
             if 'text' in data:
                 msg = json.loads(data['text'])
                 action = msg.get('action')
                 if action == 'clear_sentence':
-                    sentence = []
-                    await ws.send_json({'type': 'sentence_update', 'sentence': []})
+                    current_signs = []
+                    completed_phrases = []
+                    await ws.send_json({
+                        'type': 'sentence_update',
+                        'sentence': [],
+                        'translated': '',
+                        'phrases': [],
+                    })
                 elif action == 'set_threshold':
                     threshold = float(msg.get('value', THRESHOLD))
                 elif action == 'reload_index':
@@ -54,7 +68,7 @@ async def inference_websocket(ws: WebSocket):
                     await ws.send_json({'type': 'index_reloaded', 'loaded': eng.loaded})
                 continue
 
-            # Handle binary messages (JPEG frames)
+            # Binary frames (JPEG)
             if 'bytes' not in data:
                 continue
 
@@ -64,10 +78,34 @@ async def inference_websocket(ws: WebSocket):
             if frame is None:
                 continue
 
-            # Extract features
             features, results, hand_visible = mp_service.process_frame(frame)
 
+            now = time.time()
+
             if not hand_visible:
+                # Check if we should finalize current phrase (pause detected)
+                if hand_was_visible and current_signs:
+                    time_since_hand = now - last_hand_time
+                    if time_since_hand >= PAUSE_THRESHOLD:
+                        # Finalize current phrase
+                        if translator.loaded:
+                            translated = translator.translate(current_signs)
+                        else:
+                            translated = ' '.join(current_signs)
+                        completed_phrases.append(translated)
+                        current_signs = []
+
+                        await ws.send_json({
+                            'type': 'sentence_update',
+                            'sentence': [],
+                            'translated': '',
+                            'phrases': completed_phrases,
+                        })
+
+                if hand_was_visible and not hand_visible:
+                    last_hand_time = now
+
+                hand_was_visible = False
                 segmenter.reset()
                 await ws.send_json({
                     'type': 'status',
@@ -78,10 +116,12 @@ async def inference_websocket(ws: WebSocket):
                 })
                 continue
 
-            # Process through segmenter
+            # Hand is visible
+            hand_was_visible = True
+            last_hand_time = now
+
             seg_result = segmenter.process_features(features)
 
-            # Send status
             await ws.send_json({
                 'type': 'status',
                 'hand_visible': True,
@@ -116,13 +156,20 @@ async def inference_websocket(ws: WebSocket):
                 inference_ms = int((time.time() - t0) * 1000)
 
                 if best_word and best_dist is not None and best_dist < threshold:
-                    if not sentence or sentence[-1] != best_word:
-                        sentence.append(best_word)
-                        if len(sentence) > 10:
-                            sentence = sentence[-10:]
+                    if not current_signs or current_signs[-1] != best_word:
+                        current_signs.append(best_word)
+
+                        # Translate current phrase in real-time
+                        if translator.loaded and len(current_signs) >= 1:
+                            translated = translator.translate(current_signs)
+                        else:
+                            translated = ' '.join(current_signs)
+
                         await ws.send_json({
                             'type': 'sentence_update',
-                            'sentence': sentence,
+                            'sentence': list(current_signs),
+                            'translated': translated,
+                            'phrases': completed_phrases,
                         })
 
                 if best_word:

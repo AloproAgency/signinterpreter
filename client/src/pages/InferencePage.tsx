@@ -6,13 +6,14 @@ import { useApp } from '../lib/context';
 import {
   Video, Wifi, WifiOff, Trash2, Hand, Activity,
   Copy, Settings2, Maximize, Minimize,
-  ChevronRight, Zap,
+  ChevronRight, Zap, Send, Type,
 } from 'lucide-react';
+import { api } from '../lib/api';
 
 export default function InferencePage() {
   const { videoRef, canvasRef, active, start, captureFrame } = useWebcam();
   const {
-    connected, status, prediction, sentence, lastAddedIndex,
+    connected, status, prediction, sentence, translated, phrases, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold,
   } = useInference(captureFrame, active);
   const { addToast } = useApp();
@@ -20,17 +21,31 @@ export default function InferencePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [threshold, setThresholdLocal] = useState(50);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [manualInput, setManualInput] = useState('');
+  const [manualResult, setManualResult] = useState('');
+  const [showManual, setShowManual] = useState(false);
 
   useEffect(() => {
     connect();
     return () => disconnect();
   }, [connect, disconnect]);
 
+  const handleManualTranslate = async () => {
+    if (!manualInput.trim()) return;
+    try {
+      const result = await api.translate(manualInput.trim());
+      setManualResult(result.sentence);
+    } catch {
+      setManualResult('Erreur de traduction');
+    }
+  };
+
   const copySentence = useCallback(() => {
-    if (sentence.length === 0) return;
-    navigator.clipboard.writeText(sentence.join(' '));
-    addToast('success', 'Phrase copiee dans le presse-papier');
-  }, [sentence, addToast]);
+    const fullText = [...phrases, translated].filter(Boolean).join('\n');
+    if (!fullText) return;
+    navigator.clipboard.writeText(fullText);
+    addToast('success', 'Texte copie dans le presse-papier');
+  }, [phrases, translated, addToast]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -56,29 +71,43 @@ export default function InferencePage() {
 
   return (
     <div className="h-full flex flex-col relative">
-      {/* Sentence bar */}
-      <div className="border-b border-[#d0d7de] dark:border-[#30363d] px-4 md:px-6 py-3 flex items-center gap-3 bg-[#f6f8fa] dark:bg-[#161b22]">
-        <div className="flex-1 min-h-[36px] flex items-center">
-          {sentence.length > 0 ? (
-            <div className="flex gap-2 flex-wrap">
-              {sentence.map((word, i) => (
-                <span
-                  key={`${i}-${word}`}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium border border-[rgba(19,150,186,0.15)] bg-[rgba(19,150,186,0.1)] text-[#1396ba] ${
-                    i === lastAddedIndex ? 'animate-word-pop' : ''
-                  }`}
-                >
-                  {word}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm flex items-center gap-2 text-[#8b949e] dark:text-[#484f58]">
-              <ChevronRight className="w-3.5 h-3.5 text-[#1396ba]/50" />
-              <span>Signez pour commencer...</span>
-            </p>
-          )}
-        </div>
+      {/* Translation bar */}
+      <div className="border-b border-[#d0d7de] dark:border-[#30363d] px-4 md:px-6 py-3 bg-[#f6f8fa] dark:bg-[#161b22]">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-h-[36px]">
+            {/* Completed phrases */}
+            {phrases.length > 0 && (
+              <div className="mb-2 space-y-1">
+                {phrases.map((phrase, i) => (
+                  <p key={i} className="text-base text-[#1f2328] dark:text-[#e6edf3]">{phrase}</p>
+                ))}
+              </div>
+            )}
+
+            {/* Current phrase being translated */}
+            {translated ? (
+              <div>
+                <p className="text-base font-medium text-[#1396ba]">{translated}</p>
+                <div className="flex gap-1.5 mt-1 flex-wrap">
+                  {sentence.map((word, i) => (
+                    <span
+                      key={`${i}-${word}`}
+                      className={`px-2 py-0.5 rounded text-sm text-[#8b949e] bg-[rgba(19,150,186,0.05)] ${
+                        i === lastAddedIndex ? 'animate-word-pop' : ''
+                      }`}
+                    >
+                      {word}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : phrases.length === 0 ? (
+              <p className="text-sm flex items-center gap-2 text-[#8b949e] dark:text-[#484f58]">
+                <ChevronRight className="w-3.5 h-3.5 text-[#1396ba]/50" />
+                <span>Signez pour commencer...</span>
+              </p>
+            ) : null}
+          </div>
 
         <div className="flex items-center gap-1 shrink-0">
           {sentence.length > 0 && (
@@ -109,12 +138,24 @@ export default function InferencePage() {
             <Settings2 className="w-3.5 h-3.5" />
           </button>
           <button
+            onClick={() => setShowManual(!showManual)}
+            className={`p-2 rounded-md transition-colors ${
+              showManual
+                ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
+                : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333] hover:text-[#1f2328] dark:hover:text-[#e6edf3]'
+            }`}
+            title="Tester la traduction"
+          >
+            <Type className="w-3.5 h-3.5" />
+          </button>
+          <button
             onClick={toggleFullscreen}
             className="p-2 rounded-md transition-colors hidden md:block text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333] hover:text-[#1f2328] dark:hover:text-[#e6edf3]"
             title="Plein ecran (F)"
           >
             {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
           </button>
+        </div>
         </div>
       </div>
 
@@ -158,6 +199,34 @@ export default function InferencePage() {
       )}
 
       {/* Main content */}
+      {/* Manual translation input */}
+      {showManual && (
+        <div className="border-b border-[#d0d7de] dark:border-[#30363d] px-4 md:px-6 py-3 bg-white dark:bg-[#0d1117] animate-slide-up">
+          <div className="flex gap-2 items-center max-w-2xl">
+            <input
+              type="text"
+              value={manualInput}
+              onChange={e => setManualInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleManualTranslate()}
+              placeholder="Tapez des signes : moi manger pomme"
+              className="flex-1 rounded-md px-3 py-2 text-sm bg-[#f6f8fa] dark:bg-[#161b22] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#8b949e] focus:outline-none focus:border-[#1396ba] focus:ring-1 focus:ring-[#1396ba]/30"
+            />
+            <button
+              onClick={handleManualTranslate}
+              className="px-4 py-2 rounded-md text-sm font-medium bg-[#1396ba] hover:bg-[#17b8e3] text-white cursor-pointer flex items-center gap-1.5"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Traduire
+            </button>
+          </div>
+          {manualResult && (
+            <p className="mt-2 text-base font-medium text-[#1f2328] dark:text-[#e6edf3]">
+              → {manualResult}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col lg:flex-row min-h-0">
         {/* Webcam panel */}
         <div className="flex-1 p-4 md:p-6 flex flex-col items-center justify-center">
