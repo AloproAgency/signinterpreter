@@ -1,21 +1,23 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWebcam } from '../hooks/useWebcam';
 import { useInference } from '../hooks/useInference';
+import { useMediaPipe } from '../hooks/useMediaPipe';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useApp } from '../lib/context';
 import {
   Video, Wifi, WifiOff, Trash2, Hand, Activity,
   Copy, Settings2, Maximize, Minimize,
-  ChevronRight, Zap, Send, Type,
+  ChevronRight, Zap, Send, Type, Loader2,
 } from 'lucide-react';
 import { api } from '../lib/api';
 
 export default function InferencePage() {
-  const { videoRef, canvasRef, active, start, captureFrame } = useWebcam();
+  const { videoRef, canvasRef, active, start } = useWebcam();
+  const { init: initMediaPipe, ready: mediaPipeReady, loading: mediaPipeLoading, processFrame } = useMediaPipe();
   const {
     connected, status, prediction, sentence, translated, phrases, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold,
-  } = useInference(captureFrame, active);
+  } = useInference(processFrame, videoRef, active, mediaPipeReady);
   const { addToast } = useApp();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -29,6 +31,15 @@ export default function InferencePage() {
     connect();
     return () => disconnect();
   }, [connect, disconnect]);
+
+  useEffect(() => {
+    initMediaPipe();
+  }, [initMediaPipe]);
+
+  const handleStart = useCallback(async () => {
+    await initMediaPipe();
+    await start();
+  }, [initMediaPipe, start]);
 
   const handleManualTranslate = async () => {
     if (!manualInput.trim()) return;
@@ -288,11 +299,15 @@ export default function InferencePage() {
             {!active && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                 <button
-                  onClick={start}
-                  className="bg-[#1396ba] hover:bg-[#17b8e3] text-white px-6 py-3 rounded-md font-medium text-sm flex items-center gap-2.5 transition-colors cursor-pointer"
+                  onClick={handleStart}
+                  disabled={mediaPipeLoading}
+                  className="bg-[#1396ba] hover:bg-[#17b8e3] disabled:opacity-60 disabled:cursor-wait text-white px-6 py-3 rounded-md font-medium text-sm flex items-center gap-2.5 transition-colors cursor-pointer"
                 >
-                  <Video className="w-5 h-5" />
-                  Activer la camera
+                  {mediaPipeLoading ? (
+                    <><Loader2 className="w-5 h-5 animate-spin" />Chargement MediaPipe...</>
+                  ) : (
+                    <><Video className="w-5 h-5" />Activer la camera</>
+                  )}
                 </button>
               </div>
             )}
@@ -313,6 +328,17 @@ export default function InferencePage() {
                 </>
               ) : (
                 <><WifiOff className="w-3 h-3" />Reconnexion...</>
+              )}
+            </div>
+            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-medium border ${
+              mediaPipeReady
+                ? 'text-[#1396ba] border-[rgba(19,150,186,0.15)] bg-[rgba(19,150,186,0.1)]'
+                : 'text-[#8b949e] dark:text-[#484f58] border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]'
+            }`}>
+              {mediaPipeReady ? (
+                <><div className="w-1.5 h-1.5 rounded-full bg-[#10b981]" />MediaPipe</>
+              ) : (
+                <><Loader2 className="w-3 h-3 animate-spin" />MediaPipe</>
               )}
             </div>
             {prediction && (

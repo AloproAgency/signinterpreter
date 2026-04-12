@@ -8,6 +8,7 @@ import {
   Cpu, HardDrive, Zap, Eye, BarChart3, Play, Users, Calendar, AlertTriangle,
 } from 'lucide-react';
 import type { StatsInfo, ContributionInfo, WordInfo } from '../lib/types';
+import { SkeletonPlayer } from '../components/SkeletonPlayer';
 
 export default function AdminPage() {
   const { addToast } = useApp();
@@ -574,15 +575,9 @@ export default function AdminPage() {
                 </button>
               </div>
 
-              {/* Video player */}
+              {/* Skeleton replay */}
               <div className="p-4">
-                <video
-                  src={api.getContributionVideoUrl(previewId)}
-                  autoPlay
-                  loop
-                  controls
-                  className="w-full aspect-square object-cover rounded-md border border-[#d0d7de] dark:border-[#30363d]"
-                />
+                <SkeletonPlayer contributionId={previewId} />
               </div>
 
               {/* Actions */}

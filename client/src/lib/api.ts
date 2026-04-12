@@ -35,8 +35,9 @@ export const api = {
   translate: (signs: string) =>
     request('/translate', { method: 'POST', body: JSON.stringify({ signs }) }),
 
-  // Contribution video preview
-  getContributionVideoUrl: (id: number) => `${BASE}/contributions/${id}/video`,
+  // Contribution skeleton preview (features replay)
+  getContributionFeatures: (id: number): Promise<{ frames: number[][]; shape: [number, number] }> =>
+    request(`/contributions/${id}/features`),
 
   // Dataset words (SL reference)
   getDatasetWords: () => request('/dataset-words'),

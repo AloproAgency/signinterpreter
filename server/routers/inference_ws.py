@@ -1,13 +1,16 @@
-"""WebSocket endpoint for real-time inference."""
-import cv2
+"""WebSocket endpoint for real-time inference.
+
+MediaPipe runs client-side (browser). The client sends 171-float feature vectors
+as JSON messages; the server only handles segmentation, kNN lookup, and translation.
+"""
 import json
 import time
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ml.mediapipe_service import MediaPipeService
 from ml.inference_engine import InferenceEngine, SignSegmenter
 from ml.translator import get_translator
 from ml.constants import THRESHOLD
+from ml.features import FRAME_FEATURE_DIM
 
 router = APIRouter()
 
@@ -26,7 +29,6 @@ def get_engine():
 async def inference_websocket(ws: WebSocket):
     await ws.accept()
 
-    mp_service = MediaPipeService()
     segmenter = SignSegmenter()
     eng = get_engine()
     translator = get_translator()
@@ -48,37 +50,41 @@ async def inference_websocket(ws: WebSocket):
             if data.get('type') == 'websocket.disconnect':
                 break
 
-            # JSON commands
-            if 'text' in data:
-                msg = json.loads(data['text'])
-                action = msg.get('action')
-                if action == 'clear_sentence':
-                    current_signs = []
-                    completed_phrases = []
-                    await ws.send_json({
-                        'type': 'sentence_update',
-                        'sentence': [],
-                        'translated': '',
-                        'phrases': [],
-                    })
-                elif action == 'set_threshold':
-                    threshold = float(msg.get('value', THRESHOLD))
-                elif action == 'reload_index':
-                    eng.reload()
-                    await ws.send_json({'type': 'index_reloaded', 'loaded': eng.loaded})
+            # All messages are JSON (features + actions)
+            if 'text' not in data:
                 continue
 
-            # Binary frames (JPEG)
-            if 'bytes' not in data:
+            msg = json.loads(data['text'])
+            action = msg.get('action')
+            msg_type = msg.get('type')
+
+            if action == 'clear_sentence':
+                current_signs = []
+                completed_phrases = []
+                await ws.send_json({
+                    'type': 'sentence_update',
+                    'sentence': [],
+                    'translated': '',
+                    'phrases': [],
+                })
+                continue
+            elif action == 'set_threshold':
+                threshold = float(msg.get('value', THRESHOLD))
+                continue
+            elif action == 'reload_index':
+                eng.reload()
+                await ws.send_json({'type': 'index_reloaded', 'loaded': eng.loaded})
                 continue
 
-            frame_bytes = data['bytes']
-            nparr = np.frombuffer(frame_bytes, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if frame is None:
+            if msg_type != 'features':
                 continue
 
-            features, results, hand_visible = mp_service.process_frame(frame)
+            raw_features = msg.get('features') or []
+            if len(raw_features) != FRAME_FEATURE_DIM:
+                continue
+
+            features = np.asarray(raw_features, dtype='float32')
+            hand_visible = bool(msg.get('hand_visible', False))
 
             now = time.time()
 
@@ -187,5 +193,3 @@ async def inference_websocket(ws: WebSocket):
 
     except WebSocketDisconnect:
         pass
-    finally:
-        mp_service.close()

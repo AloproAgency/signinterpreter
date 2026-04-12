@@ -1,7 +1,16 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { Prediction, InferenceStatus } from '../lib/types';
 
-export function useInference(captureFrame: () => Blob | null, active: boolean) {
+/**
+ * Inference hook — sends extracted features (not images) to the server.
+ * MediaPipe runs client-side; only 171 floats per frame are sent via WebSocket.
+ */
+export function useInference(
+  processFrame: ((video: HTMLVideoElement) => { features: number[]; handVisible: boolean } | null) | null,
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  active: boolean,
+  mediaPipeReady: boolean,
+) {
   const wsRef = useRef<WebSocket | null>(null);
   const intervalRef = useRef<number | null>(null);
   const [connected, setConnected] = useState(false);
@@ -48,19 +57,26 @@ export function useInference(captureFrame: () => Blob | null, active: boolean) {
     }
   }, []);
 
+  // Process frames locally with MediaPipe and send features to server
   useEffect(() => {
-    if (active && connected) {
+    if (active && connected && mediaPipeReady && processFrame && videoRef.current) {
       intervalRef.current = window.setInterval(() => {
-        const blob = captureFrame();
-        if (blob && wsRef.current?.readyState === WebSocket.OPEN) {
-          blob.arrayBuffer().then(buf => wsRef.current?.send(buf));
+        if (!videoRef.current || !processFrame) return;
+        const result = processFrame(videoRef.current);
+        if (result && wsRef.current?.readyState === WebSocket.OPEN) {
+          // Send features as JSON (171 floats ≈ 1.5 KB instead of 50 KB JPEG)
+          wsRef.current.send(JSON.stringify({
+            type: 'features',
+            features: result.features,
+            hand_visible: result.handVisible,
+          }));
         }
-      }, 1000 / 8); // 8 FPS (reduced for network latency)
+      }, 1000 / 15);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [active, connected, captureFrame]);
+  }, [active, connected, mediaPipeReady, processFrame, videoRef]);
 
   const clearSentence = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

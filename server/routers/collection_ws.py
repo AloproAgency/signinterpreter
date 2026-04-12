@@ -2,13 +2,11 @@
 import cv2
 import json
 import numpy as np
-import os
-import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ml.mediapipe_service import MediaPipeService
 from ml.template_manager import save_contribution, list_templates
 from server.database import SessionLocal, Word, Contribution
-from ml.constants import SEQUENCE_LENGTH, CONTRIBUTIONS_DIR
+from ml.constants import SEQUENCE_LENGTH
 
 router = APIRouter()
 
@@ -37,7 +35,6 @@ async def collection_websocket(ws: WebSocket):
     mp_service = MediaPipeService()
     recording = False
     features_buffer = []
-    raw_frames_buffer = []  # store raw JPEG bytes for video preview
     current_word = None
     contributor = 'anonymous'
 
@@ -64,7 +61,6 @@ async def collection_websocket(ws: WebSocket):
                     existing = list_templates(current_word)
                     recording = True
                     features_buffer = []
-                    raw_frames_buffer = []
                     await ws.send_json({
                         'type': 'ready',
                         'word': current_word,
@@ -101,37 +97,6 @@ async def collection_websocket(ws: WebSocket):
                             features_path = save_contribution(contrib.id, template)
                             contrib.file_path = features_path
 
-                            # Save video as .mp4 from raw frames
-                            video_path = os.path.join(CONTRIBUTIONS_DIR, f'{contrib.id}.mp4')
-                            if raw_frames_buffer:
-                                first = cv2.imdecode(np.frombuffer(raw_frames_buffer[0], np.uint8), cv2.IMREAD_COLOR)
-                                if first is not None:
-                                    h, w = first.shape[:2]
-                                    # Use H.264 codec (avc1) for browser compatibility
-                                    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-                                    writer = cv2.VideoWriter(video_path, fourcc, 15.0, (w, h))
-                                    if not writer.isOpened():
-                                        # Fallback: save as individual JPEGs in a webm via temp
-                                        # Or try XVID then convert
-                                        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-                                        avi_path = video_path.replace('.mp4', '.avi')
-                                        writer = cv2.VideoWriter(avi_path, fourcc, 15.0, (w, h))
-                                        for jpeg_bytes in raw_frames_buffer[:SEQUENCE_LENGTH]:
-                                            frame = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
-                                            if frame is not None:
-                                                writer.write(frame)
-                                        writer.release()
-                                        # Convert to mp4 with ffmpeg
-                                        os.system(f'ffmpeg -y -i "{avi_path}" -c:v libx264 -pix_fmt yuv420p "{video_path}" 2>/dev/null')
-                                        if os.path.exists(avi_path):
-                                            os.remove(avi_path)
-                                    else:
-                                        for jpeg_bytes in raw_frames_buffer[:SEQUENCE_LENGTH]:
-                                            frame = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
-                                            if frame is not None:
-                                                writer.write(frame)
-                                        writer.release()
-
                             db.commit()
 
                             await ws.send_json({
@@ -151,12 +116,10 @@ async def collection_websocket(ws: WebSocket):
 
                     recording = False
                     features_buffer = []
-                    raw_frames_buffer = []
 
                 elif action == 'cancel':
                     recording = False
                     features_buffer = []
-                    raw_frames_buffer = []
                     await ws.send_json({'type': 'cancelled'})
 
                 continue
@@ -176,7 +139,6 @@ async def collection_websocket(ws: WebSocket):
 
             if recording:
                 features_buffer.append(features)
-                raw_frames_buffer.append(frame_bytes)  # keep raw JPEG
 
                 await ws.send_json({
                     'type': 'recording',

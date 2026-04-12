@@ -181,15 +181,9 @@ def review_contribution(
             word.template_count = len(template_manager.list_templates(word.name))
 
     elif review.status == 'rejected':
-        # Delete pending files (features + video)
+        # Delete pending features file
         if os.path.exists(contrib.file_path):
             os.remove(contrib.file_path)
-
-    # Always delete video after review (approved or rejected)
-    from ml.constants import CONTRIBUTIONS_DIR
-    video_path = os.path.join(CONTRIBUTIONS_DIR, f'{contribution_id}.mp4')
-    if os.path.exists(video_path):
-        os.remove(video_path)
 
     contrib.status = review.status
     contrib.notes = review.notes
@@ -326,17 +320,20 @@ def serve_reference_video(word_name: str):
     )
 
 
-@router.get('/contributions/{contribution_id}/video')
-def serve_contribution_video(contribution_id: int, db: Session = Depends(get_db)):
-    """Serve the recorded video for a contribution."""
-    from ml.constants import CONTRIBUTIONS_DIR
+@router.get('/contributions/{contribution_id}/features')
+def serve_contribution_features(contribution_id: int, db: Session = Depends(get_db)):
+    """Serve the recorded features array for a contribution (for skeleton playback)."""
+    import numpy as np
     contrib = db.query(Contribution).get(contribution_id)
     if not contrib:
         raise HTTPException(404, 'Contribution not found')
-    video_path = os.path.join(CONTRIBUTIONS_DIR, f'{contribution_id}.mp4')
-    if not os.path.exists(video_path):
-        raise HTTPException(404, 'Video not found')
-    return FileResponse(video_path, media_type='video/mp4')
+    if not contrib.file_path or not os.path.exists(contrib.file_path):
+        raise HTTPException(404, 'Features file not found')
+    arr = np.load(contrib.file_path)
+    # Only keep the raw 171 per-frame features (ignore velocity if present)
+    if arr.ndim == 2 and arr.shape[1] >= 171:
+        arr = arr[:, :171]
+    return {'frames': arr.tolist(), 'shape': list(arr.shape)}
 
 
 @router.get('/dataset-words')
