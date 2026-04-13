@@ -14,11 +14,12 @@ from ml.constants import (
     PREDICT_AFTER_N_FRAMES, PREDICT_EVERY_N_FRAMES, WEIGHT_POWER, DATA_DIR,
 )
 
-# Precompute temporal weights
-FRAME_WEIGHTS = np.array([
-    ((i + 1) / SEQUENCE_LENGTH) ** WEIGHT_POWER
-    for i in range(SEQUENCE_LENGTH)
-], dtype='float32')[:, None]
+# Precompute temporal weights: start=0.1, middle=0.8, end=1.0 (piecewise linear)
+FRAME_WEIGHTS = np.interp(
+    np.linspace(0, 1, SEQUENCE_LENGTH),
+    [0.0, 0.5, 1.0],
+    [0.1, 0.8, 1.0],
+).astype('float32')[:, None]
 
 
 def compute_summary(template):
