@@ -21,7 +21,7 @@ export default function InferencePage() {
   const { addToast } = useApp();
 
   const [showSettings, setShowSettings] = useState(false);
-  const [threshold, setThresholdLocal] = useState(50);
+  const [threshold, setThresholdLocal] = useState(150);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [manualInput, setManualInput] = useState('');
   const [manualResult, setManualResult] = useState('');
