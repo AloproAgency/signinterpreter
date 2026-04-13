@@ -219,8 +219,7 @@ jobs:
           ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
           chown -h "$APP_USER:$APP_USER" "$CURRENT_LINK" || true
 
-          # Symlink SL reference dataset so the app can find it
-          ln -sfn "$APP_BASE/SL" "$RELEASES_DIR/SL" 2>/dev/null || true
+          # (SL dataset is read directly from $APP_BASE/SL — no symlink needed)
 
           # Create symlinks for static assets (nginx serves them directly)
           cd "$APP_BASE"
@@ -252,7 +251,9 @@ jobs:
 
           echo "[INFO] Cleaning old releases..."
           cd "$RELEASES_DIR"
-          ls -1dt */ 2>/dev/null | tail -n +4 | xargs -r rm -rf
+          # Only match timestamped release dirs (YYYYMMDD_HHMMSS), never follow symlinks
+          find . -maxdepth 1 -mindepth 1 \( -type d -a -not -type l \) -name '[0-9]*' \
+            | sort -r | tail -n +4 | xargs -r rm -rf
           rm -f "$ARCHIVE"
 
           echo "[OK] Deploy successful."
