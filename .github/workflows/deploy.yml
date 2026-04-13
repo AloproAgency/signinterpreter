@@ -177,6 +177,24 @@ jobs:
           source venv/bin/activate
           pip install -q -r requirements.txt 2>/dev/null || true
 
+          # Restore SL reference dataset if missing or empty
+          # (kaggle credentials expected at $SHARED_DIR/kaggle.json)
+          SL_DIR="$APP_BASE/SL"
+          if [ ! -d "$SL_DIR" ] || [ -z "$(ls -A "$SL_DIR" 2>/dev/null)" ]; then
+            echo "[INFO] SL dataset missing — downloading from Kaggle and translating..."
+            if [ -f "$SHARED_DIR/kaggle.json" ]; then
+              mkdir -p /root/.kaggle
+              cp "$SHARED_DIR/kaggle.json" /root/.kaggle/kaggle.json
+              chmod 600 /root/.kaggle/kaggle.json
+              mkdir -p "$SL_DIR"
+              python3 "$NEW_RELEASE/scripts/setup_dataset.py" --target "$SL_DIR" || \
+                echo "[WARN] SL dataset setup failed — continuing without it."
+              chown -R "$APP_USER:$APP_USER" "$SL_DIR" || true
+            else
+              echo "[WARN] $SHARED_DIR/kaggle.json missing — cannot auto-download SL dataset."
+            fi
+          fi
+
           echo "[INFO] Setting permissions..."
           chown -R "$APP_USER:$APP_USER" "$NEW_RELEASE" "$SHARED_DIR" || true
           chmod +x "$NEW_RELEASE/run.sh" "$NEW_RELEASE/start.sh" || true
