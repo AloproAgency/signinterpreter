@@ -35,6 +35,9 @@ jobs:
           # Server code
           cp -R server .deploy_tmp/server
 
+          # Setup scripts (dataset download/translation)
+          cp -R scripts .deploy_tmp/scripts
+
           # Frontend build
           cp -R client/dist .deploy_tmp/client_dist
 
