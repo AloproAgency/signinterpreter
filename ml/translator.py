@@ -95,6 +95,87 @@ class Translator:
 
         return encoder_model, decoder_model
 
+    def score_signs(self, signs_list, max_steps=None):
+        """
+        Implicit language-model score for a sign sequence.
+
+        Runs the seq2seq greedy decoding and sums log-probabilities of the
+        produced French tokens. Higher (less negative) means the model
+        'understands' the sequence better — i.e. the sign sequence is more
+        plausible under the training distribution.
+
+        The returned score is length-normalized by number of input signs so
+        that rerank comparisons across candidates are fair.
+        """
+        if not self.loaded or not signs_list:
+            return 0.0
+
+        signs_text = ' '.join(w.lower() for w in signs_list)
+
+        try:
+            sign_seq = self.sign_tok.texts_to_sequences([signs_text])
+            sign_padded = pad_sequences(sign_seq, maxlen=self.config['max_sign_len'], padding='post')
+
+            enc_outputs, state_h, state_c = self.encoder_model.predict(sign_padded, verbose=0)
+
+            target_seq = np.array([[self.sent_tok.word_index.get('<start>', 1)]])
+            log_prob = 0.0
+            max_steps = max_steps or self.config['max_sent_len']
+
+            for _ in range(max_steps):
+                output, state_h, state_c = self.decoder_model.predict(
+                    [target_seq, state_h, state_c, enc_outputs], verbose=0
+                )
+                probs = output[0, 0, :]
+                token_id = int(np.argmax(probs))
+                p = float(probs[token_id])
+                log_prob += float(np.log(max(p, 1e-9)))
+
+                if token_id == 0 or self.sent_tok.index_word.get(token_id, '') == '<end>':
+                    break
+                target_seq = np.array([[token_id]])
+
+            return log_prob / max(1, len(signs_list))
+
+        except Exception:
+            return 0.0
+
+    def prune_intruders(self, signs_list, min_gain=0.15, min_keep=1):
+        """
+        Greedily drop signs whose removal clearly improves the translation
+        log-score. Returns (cleaned_signs, removed_indices).
+
+        `min_gain` is the minimum per-sign log-prob improvement required to
+        justify dropping a sign (higher = more conservative). `min_keep` is
+        the minimum length to preserve (never go below it).
+
+        Uses O(N²) score_signs calls in the worst case — only call at phrase
+        finalization, not on every new sign.
+        """
+        if not self.loaded or len(signs_list) <= min_keep:
+            return list(signs_list), []
+
+        signs = list(signs_list)
+        removed = []
+        # Greedy: keep dropping as long as any single removal improves the score
+        while len(signs) > min_keep:
+            baseline = self.score_signs(signs)
+            best_idx = -1
+            best_score = baseline
+            for i in range(len(signs)):
+                candidate = signs[:i] + signs[i + 1:]
+                if len(candidate) < min_keep:
+                    continue
+                s = self.score_signs(candidate)
+                if s - baseline > min_gain and s > best_score:
+                    best_score = s
+                    best_idx = i
+            if best_idx < 0:
+                break
+            removed.append(signs[best_idx])
+            signs = signs[:best_idx] + signs[best_idx + 1:]
+        return signs, removed
+
     def translate(self, signs_list):
         """
         Translate a list of sign words to a French sentence.

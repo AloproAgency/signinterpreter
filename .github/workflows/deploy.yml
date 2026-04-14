@@ -153,6 +153,14 @@ jobs:
               [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/sentence_model/$(basename $f)"
             done
           fi
+
+          # Link Phono Random Forest (rf.pkl + meta.json) from shared
+          if [ -d "$SHARED_DIR/data/phono" ]; then
+            mkdir -p "$NEW_RELEASE/data/phono"
+            for f in "$SHARED_DIR/data/phono"/*; do
+              [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/phono/$(basename $f)"
+            done
+          fi
           if [ -f "$SHARED_DIR/signinterpreter.db" ]; then
             ln -sfn "$SHARED_DIR/signinterpreter.db" "$NEW_RELEASE/server/signinterpreter.db"
           fi

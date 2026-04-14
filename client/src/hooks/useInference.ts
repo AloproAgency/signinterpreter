@@ -20,7 +20,10 @@ export function useInference(
   const [prediction, setPrediction] = useState<Prediction | null>(null);
   const [sentence, setSentence] = useState<string[]>([]);
   const [translated, setTranslated] = useState('');
+  const [translatedScore, setTranslatedScore] = useState(0);
   const [phrases, setPhrases] = useState<string[]>([]);
+  const [phraseSigns, setPhraseSigns] = useState<string[][]>([]);
+  const [phraseScores, setPhraseScores] = useState<number[]>([]);
   const [lastAddedIndex, setLastAddedIndex] = useState(-1);
 
   const connect = useCallback(() => {
@@ -45,7 +48,10 @@ export function useInference(
           return data.sentence;
         });
         if (data.translated !== undefined) setTranslated(data.translated);
+        if (data.translated_score !== undefined) setTranslatedScore(data.translated_score);
         if (data.phrases !== undefined) setPhrases(data.phrases);
+        if (data.phrase_signs !== undefined) setPhraseSigns(data.phrase_signs);
+        if (data.phrase_scores !== undefined) setPhraseScores(data.phrase_scores);
       }
     };
   }, []);
@@ -71,7 +77,7 @@ export function useInference(
             hand_visible: result.handVisible,
           }));
         }
-      }, 1000 / 15);
+      }, 1000 / 30);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -84,7 +90,10 @@ export function useInference(
     }
     setSentence([]);
     setTranslated('');
+    setTranslatedScore(0);
     setPhrases([]);
+    setPhraseSigns([]);
+    setPhraseScores([]);
     setLastAddedIndex(-1);
   }, []);
 
@@ -94,8 +103,15 @@ export function useInference(
     }
   }, []);
 
+  const finalizeSentence = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: 'finalize_sentence' }));
+    }
+  }, []);
+
   return {
-    connected, status, prediction, sentence, translated, phrases, lastAddedIndex,
-    connect, disconnect, clearSentence, setThreshold,
+    connected, status, prediction, sentence, translated, translatedScore,
+    phrases, phraseSigns, phraseScores, lastAddedIndex,
+    connect, disconnect, clearSentence, setThreshold, finalizeSentence,
   };
 }

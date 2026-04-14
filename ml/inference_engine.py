@@ -5,7 +5,13 @@ import json
 import faiss
 from fastdtw import fastdtw
 from scipy.spatial.distance import euclidean
-from ml.features import FEATURE_DIM, add_wrist_velocity
+from ml.features import (
+    FEATURE_DIM, add_wrist_velocity, to_right_dominant, both_hands_missing,
+    interpolate_holes,
+)
+
+# Templates with too many frames missing both hands are filtered out at load time.
+MAX_BOTH_HANDS_MISSING = 3
 from ml.constants import (
     INDEX_PATH, METADATA_PATH, TEMPLATE_DIR,
     SEQUENCE_LENGTH, PREFILTER_TOP, K, THRESHOLD,
@@ -14,12 +20,24 @@ from ml.constants import (
     PREDICT_AFTER_N_FRAMES, PREDICT_EVERY_N_FRAMES, WEIGHT_POWER, DATA_DIR,
 )
 
-# Precompute temporal weights: start=0.1, middle=0.8, end=1.0 (piecewise linear)
-FRAME_WEIGHTS = np.interp(
-    np.linspace(0, 1, SEQUENCE_LENGTH),
-    [0.0, 0.5, 1.0],
-    [0.1, 0.8, 1.0],
-).astype('float32')[:, None]
+# Uniform temporal weights (no frame is privileged)
+FRAME_WEIGHTS = np.ones((SEQUENCE_LENGTH, 1), dtype='float32')
+
+# Per-channel weights — boost finger shape so it dominates the DTW distance.
+# Layout (FEATURE_DIM = 177): pose[0:39], LH shape[39:102], LH palm[102:105],
+# RH shape[105:168], RH palm[168:171], wrist velocity[171:177].
+HAND_SHAPE_BOOST = 3.0
+CHANNEL_WEIGHTS = np.ones(FEATURE_DIM, dtype='float32')
+CHANNEL_WEIGHTS[39:102] = HAND_SHAPE_BOOST   # left hand shape
+CHANNEL_WEIGHTS[105:168] = HAND_SHAPE_BOOST  # right hand shape
+
+# Drop the Z coordinate of finger landmarks (depth from single camera is unreliable).
+# Hand shape = 21 landmarks × (x, y, z) flattened. Z indices = 2, 5, 8, ..., 62 within each block.
+for base in (39, 105):
+    for k in range(21):
+        CHANNEL_WEIGHTS[base + k * 3 + 2] = 0.0
+
+CHANNEL_SQRT = np.sqrt(CHANNEL_WEIGHTS)
 
 
 def compute_summary(template):
@@ -72,6 +90,8 @@ class InferenceEngine:
 
             self.templates = []
             valid_metadata = []
+            n_filtered_quality = 0
+            n_mirrored = 0
             for m in self.metadata:
                 path = m['path']
                 if not os.path.isabs(path):
@@ -79,10 +99,21 @@ class InferenceEngine:
                 if not os.path.exists(path):
                     continue  # skip missing files
                 tpl = np.load(path)
-                self.templates.append(add_wrist_velocity(tpl))
+                # A) quality filter — drop templates with too many frames where both hands are missing
+                if both_hands_missing(tpl) > MAX_BOTH_HANDS_MISSING:
+                    n_filtered_quality += 1
+                    continue
+                # B) fill mid-sequence detection holes via interpolation
+                tpl = interpolate_holes(tpl[:, :FEATURE_DIM] if tpl.shape[1] > 171 else tpl)
+                # C) canonicalize laterality — always put the dominant hand on the right
+                tpl_canon = to_right_dominant(tpl)
+                if not np.array_equal(tpl_canon, tpl):
+                    n_mirrored += 1
+                self.templates.append(add_wrist_velocity(tpl_canon))
                 valid_metadata.append(m)
 
             self.metadata = valid_metadata
+            print(f'  filtered (low quality): {n_filtered_quality}, mirrored to right-dominant: {n_mirrored}')
 
             if not self.templates:
                 print("WARNING: No valid templates found.")
@@ -110,6 +141,8 @@ class InferenceEngine:
 
         # Resample to SEQUENCE_LENGTH then add wrist velocity
         query = resample_sequence(query_sequence, SEQUENCE_LENGTH)
+        query = interpolate_holes(query)
+        query = to_right_dominant(query)
         query = add_wrist_velocity(query)
         query_summary = compute_summary(query).reshape(1, -1)
 
@@ -117,13 +150,14 @@ class InferenceEngine:
         n_search = min(PREFILTER_TOP, self.index.ntotal)
         _, indices = self.index.search(query_summary, n_search)
 
-        # Weighted DTW
-        weighted_query = query * np.sqrt(FRAME_WEIGHTS)
+        # Weighted DTW (frame × channel weighting)
+        frame_sqrt = np.sqrt(FRAME_WEIGHTS)
+        weighted_query = query * frame_sqrt * CHANNEL_SQRT
         dtw_results = []
         for idx in indices[0]:
             if idx < 0:
                 continue
-            weighted_template = self.templates[idx] * np.sqrt(FRAME_WEIGHTS)
+            weighted_template = self.templates[idx] * frame_sqrt * CHANNEL_SQRT
             d, _ = fastdtw(weighted_query, weighted_template, dist=euclidean)
             dtw_results.append((d, self.metadata[idx]['word']))
 
@@ -154,8 +188,15 @@ class SignSegmenter:
         self.smoothed_features = None
         self.prev_features = None
         self.motion_energy = 0.0
-        self.peak_energy = 0.0  # track the max energy during this sign
-        self.energy_history = []  # recent energy values for deceleration detection
+        self.peak_energy = 0.0
+        self.energy_history = []
+        self.start_streak = 0
+        self._just_recovered = False  # skip motion calc on first frame after a blind period
+
+    def notify_hand_lost(self):
+        """Called by the WS layer when MediaPipe drops the hand. Next good
+        frame must be treated as a continuation point, not a new delta."""
+        self._just_recovered = True
 
     def process_features(self, raw_features):
         # Smooth
@@ -167,11 +208,17 @@ class SignSegmenter:
                 (1 - SMOOTH_ALPHA) * self.smoothed_features
             ).astype('float32')
 
-        # Motion energy
-        if self.prev_features is not None:
-            self.motion_energy = float(np.mean(np.abs(
-                self.smoothed_features - self.prev_features
-            )))
+        # Motion energy — restrict to HAND dims (39:171). Skip the computation
+        # for one frame after a blind period to avoid a spurious spike from
+        # the hand having moved during the missing frames.
+        if self._just_recovered:
+            self.motion_energy = 0.0
+            self._just_recovered = False
+        elif self.prev_features is not None:
+            hand_delta = np.abs(
+                self.smoothed_features[39:171] - self.prev_features[39:171]
+            )
+            self.motion_energy = float(hand_delta.mean())
         else:
             self.motion_energy = 0.0
         self.prev_features = self.smoothed_features.copy()
@@ -180,12 +227,20 @@ class SignSegmenter:
         ended_buffer = None
 
         if not self.is_signing:
+            # Require MOTION_START_THRESHOLD for 2 consecutive frames before arming.
+            # Catches slow/subtle signs (lower threshold) while rejecting single-frame spikes.
             if self.motion_energy > MOTION_START_THRESHOLD:
+                self.start_streak += 1
+            else:
+                self.start_streak = 0
+
+            if self.start_streak >= 2:
                 self.is_signing = True
                 self.sign_buffer = [self.smoothed_features.copy()]
                 self.low_motion_count = 0
                 self.peak_energy = self.motion_energy
                 self.energy_history = [self.motion_energy]
+                self.start_streak = 0
         else:
             self.sign_buffer.append(self.smoothed_features.copy())
             self.energy_history.append(self.motion_energy)
@@ -201,35 +256,58 @@ class SignSegmenter:
                 self.low_motion_count = 0
             end_by_idle = self.low_motion_count >= MOTION_END_FRAMES
 
-            # Method 2: deceleration detection (energy dropped to < 30% of peak)
-            # Only after we've had at least MIN_SIGN_FRAMES and a significant peak
+            # Method 2: deceleration to < 30% of peak (global)
             end_by_deceleration = (
                 len(self.sign_buffer) >= MIN_SIGN_FRAMES
                 and self.peak_energy > MOTION_START_THRESHOLD * 2
                 and self.motion_energy < self.peak_energy * 0.3
             )
 
+            # Method 3: motion VALLEY — current frame is a local minimum vs
+            # the recent peak (last 6 frames). Catches transitions between two
+            # consecutive signs where motion dips but never reaches the idle
+            # threshold. Requires a substantial dip (≤ 50 % of recent peak).
+            end_by_valley = False
+            if len(self.energy_history) >= 6 and len(self.sign_buffer) >= MIN_SIGN_FRAMES:
+                recent_peak = max(self.energy_history[-6:])
+                if (recent_peak > MOTION_START_THRESHOLD * 2
+                        and self.motion_energy <= recent_peak * 0.5
+                        and self.motion_energy < self.energy_history[-2]
+                        and self.energy_history[-2] < self.energy_history[-3]):
+                    # Falling edge into a valley → cut
+                    end_by_valley = True
+
             end_by_max = len(self.sign_buffer) >= MAX_SIGN_FRAMES
 
-            if end_by_idle or end_by_deceleration or end_by_max:
-                if len(self.sign_buffer) >= MIN_SIGN_FRAMES:
-                    # Trim trailing idle frames (keep only active movement)
-                    trim_idx = len(self.sign_buffer)
+            if end_by_idle or end_by_deceleration or end_by_valley or end_by_max:
+                trimmed = list(self.sign_buffer)
+                if end_by_idle:
+                    # Trim trailing idle frames
+                    trim_idx = len(trimmed)
                     for j in range(len(self.energy_history) - 1, -1, -1):
                         if self.energy_history[j] > MOTION_END_THRESHOLD:
                             trim_idx = j + 1
                             break
-                    trimmed = self.sign_buffer[:trim_idx]
+                    trimmed = trimmed[:trim_idx]
 
-                    if len(trimmed) >= MIN_SIGN_FRAMES:
-                        sign_ended = True
-                        ended_buffer = trimmed
+                if len(trimmed) >= MIN_SIGN_FRAMES:
+                    sign_ended = True
+                    ended_buffer = trimmed
 
-                self.is_signing = False
-                self.sign_buffer = []
-                self.low_motion_count = 0
-                self.peak_energy = 0.0
-                self.energy_history = []
+                # If we cut on a valley, immediately arm a new sign with the
+                # current frame so we don't miss the start of the next one.
+                if end_by_valley and self.motion_energy > MOTION_START_THRESHOLD:
+                    self.sign_buffer = [self.smoothed_features.copy()]
+                    self.low_motion_count = 0
+                    self.peak_energy = self.motion_energy
+                    self.energy_history = [self.motion_energy]
+                    # stay is_signing = True
+                else:
+                    self.is_signing = False
+                    self.sign_buffer = []
+                    self.low_motion_count = 0
+                    self.peak_energy = 0.0
+                    self.energy_history = []
 
         # Intermediate prediction
         should_predict = (

@@ -25,7 +25,7 @@ REFERENCE_DATASET = os.path.join(os.path.dirname(ROOT_DIR), 'SL')
 SEQUENCE_LENGTH = 30
 PREFILTER_TOP = 30
 K = 11
-THRESHOLD = 150.0
+THRESHOLD = 0.8  # Phono: -log(prob), accept when prob >= exp(-0.8) ≈ 0.45
 SMOOTH_ALPHA = 0.7
 MOTION_START_THRESHOLD = 0.04
 MOTION_END_THRESHOLD = 0.025

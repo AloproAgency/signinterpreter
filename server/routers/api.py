@@ -217,19 +217,31 @@ def admin_login(data: AdminLogin):
 
 @router.post('/admin/build-index')
 def build_index(db: Session = Depends(get_db)):
+    import time
+    t0 = time.time()
+
+    # 1) Rebuild the FAISS index (used by the DTW fallback engine).
     result = index_builder.build_index()
+
+    # 2) Retrain the Phono Random Forest on the current templates.
+    from ml import phono_trainer
+    try:
+        phono_info = phono_trainer.fit_and_save()
+        result['phono'] = phono_info
+    except Exception as e:
+        result['phono_error'] = str(e)
 
     build = IndexBuild(
         n_words=result.get('n_words', 0),
         n_templates=result.get('n_templates', 0),
         summary_dim=result.get('summary_dim', 0),
         status=result.get('status', 'failed'),
-        duration_ms=result.get('duration_ms', 0),
+        duration_ms=result.get('duration_ms', 0) or int((time.time() - t0) * 1000),
     )
     db.add(build)
     db.commit()
 
-    # Reload inference engine
+    # 3) Reload the live inference engine (picks up new RF + classes).
     eng = get_engine()
     eng.reload()
 

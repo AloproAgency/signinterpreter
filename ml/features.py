@@ -180,6 +180,143 @@ def extract_features_from_results(results):
     return np.concatenate([pose_features, lh_features, rh_features])
 
 
+# ---------------------------------------------------------------------------
+# Hand-laterality canonicalization + quality checks
+# ---------------------------------------------------------------------------
+# Pose pair indices (within UPPER_BODY_LANDMARKS = [nose, l_eye, r_eye, l_ear,
+# r_ear, l_sh, r_sh, l_el, r_el, l_wrist, r_wrist, l_pinky, r_pinky]).
+_POSE_PAIRS = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12)]
+_POSE_END = N_POSE_LANDMARKS * 3                  # 39
+_LH_BLOCK = slice(_POSE_END, _POSE_END + HAND_FEATURES)             # 39:105
+_RH_BLOCK = slice(_POSE_END + HAND_FEATURES,
+                  _POSE_END + 2 * HAND_FEATURES)                    # 105:171
+_LH_SHAPE = slice(_POSE_END, _POSE_END + 63)                        # 39:102
+_RH_SHAPE = slice(_POSE_END + HAND_FEATURES,
+                  _POSE_END + HAND_FEATURES + 63)                   # 105:168
+
+
+def hand_activity(seq):
+    """(lh_active_frames, rh_active_frames)."""
+    seq = np.asarray(seq)
+    lh_n = int((np.any(seq[:, _LH_SHAPE] != 0, axis=1)).sum())
+    rh_n = int((np.any(seq[:, _RH_SHAPE] != 0, axis=1)).sum())
+    return lh_n, rh_n
+
+
+def both_hands_missing(seq):
+    """Number of frames where neither hand is detected."""
+    seq = np.asarray(seq)
+    lh_z = np.all(seq[:, _LH_SHAPE] == 0, axis=1)
+    rh_z = np.all(seq[:, _RH_SHAPE] == 0, axis=1)
+    return int((lh_z & rh_z).sum())
+
+
+def mirror_horizontal(seq):
+    """Swap LH↔RH, swap pose left/right pairs, flip x of every landmark.
+    Works on raw 171-dim or 177-dim (with velocity) sequences."""
+    out = np.asarray(seq, dtype='float32').copy()
+
+    # 1. Swap LH ↔ RH blocks (shape + palm normal)
+    lh = out[:, _LH_BLOCK].copy()
+    rh = out[:, _RH_BLOCK].copy()
+    out[:, _LH_BLOCK] = rh
+    out[:, _RH_BLOCK] = lh
+
+    # 2. Swap pose left/right pairs
+    for a, b in _POSE_PAIRS:
+        ax, bx = a * 3, b * 3
+        tmp = out[:, ax:ax + 3].copy()
+        out[:, ax:ax + 3] = out[:, bx:bx + 3]
+        out[:, bx:bx + 3] = tmp
+
+    # 3. Flip x sign of every pose landmark
+    for k in range(N_POSE_LANDMARKS):
+        out[:, k * 3] *= -1
+
+    # 4. Flip x sign of every hand-shape landmark.
+    #    Palm normal is a cross product: under an x-axis reflection its y and z
+    #    flip sign (NOT its x). Flipping only x here was the previous bug that
+    #    appeared as a spurious vertical/depth inversion.
+    for base in (_POSE_END, _POSE_END + HAND_FEATURES):
+        for k in range(21):
+            out[:, base + k * 3] *= -1
+        # palm normal at base+63 (x), base+64 (y), base+65 (z)
+        out[:, base + 64] *= -1  # palm normal y
+        out[:, base + 65] *= -1  # palm normal z
+
+    # 5. Velocity (if present): swap left/right wrist velocity and flip x
+    if out.shape[1] >= FEATURE_DIM:
+        lw = out[:, FRAME_FEATURE_DIM: FRAME_FEATURE_DIM + 3].copy()
+        rw = out[:, FRAME_FEATURE_DIM + 3: FRAME_FEATURE_DIM + 6].copy()
+        out[:, FRAME_FEATURE_DIM: FRAME_FEATURE_DIM + 3] = rw
+        out[:, FRAME_FEATURE_DIM + 3: FRAME_FEATURE_DIM + 6] = lw
+        out[:, FRAME_FEATURE_DIM] *= -1
+        out[:, FRAME_FEATURE_DIM + 3] *= -1
+
+    return out
+
+
+def _interp_block_holes(block):
+    """
+    Fill mid-sequence zero-rows in a (T, D) block via linear interpolation.
+    A row is 'zero' if every feature equals 0. Leading/trailing zeros stay.
+    """
+    out = block.astype('float32').copy()
+    zero_mask = np.all(out == 0, axis=1)
+    if not zero_mask.any():
+        return out
+    good = np.where(~zero_mask)[0]
+    if len(good) < 2:
+        return out
+    first_good, last_good = good[0], good[-1]
+    for i in range(first_good + 1, last_good):
+        if not zero_mask[i]:
+            continue
+        # Find bracketing good frames
+        left = good[good < i].max()
+        right = good[good > i].min()
+        alpha = (i - left) / (right - left)
+        out[i] = (1 - alpha) * out[left] + alpha * out[right]
+    return out
+
+
+def interpolate_holes(seq):
+    """
+    Fill mid-sequence detection holes in a (T, 171 or 177) feature sequence
+    by linearly interpolating missing per-landmark positions, channel by channel.
+    Leading/trailing missing frames are left as zero (used by quality filter).
+    """
+    out = np.asarray(seq, dtype='float32').copy()
+    # Pose
+    pose = out[:, :_POSE_END]
+    out[:, :_POSE_END] = _interp_block_holes(pose)
+    # Left hand (shape + palm)
+    out[:, _LH_BLOCK] = _interp_block_holes(out[:, _LH_BLOCK])
+    # Right hand (shape + palm)
+    out[:, _RH_BLOCK] = _interp_block_holes(out[:, _RH_BLOCK])
+    return out
+
+
+def to_right_dominant(seq, bimanual_threshold=0.5):
+    """
+    Mirror horizontally so the dominant hand ends up on the right.
+
+    For bimanual signs (both hands active more than `bimanual_threshold` of
+    the sequence length), laterality is intrinsic to the sign and we do NOT
+    mirror — otherwise tiny detection noise would flip equivalent templates
+    into opposite orientations and they'd stop matching each other.
+    """
+    seq = np.asarray(seq, dtype='float32')
+    n_frames = len(seq)
+    if n_frames == 0:
+        return seq
+    lh_n, rh_n = hand_activity(seq)
+    thr = n_frames * bimanual_threshold
+    if lh_n >= thr and rh_n >= thr:
+        return seq  # bimanual — preserve orientation
+    return mirror_horizontal(seq) if lh_n > rh_n else seq
+
+
 def add_wrist_velocity(sequence):
     """
     Enrich a sequence (N, 171) with wrist velocity (N, 6) → (N, 177).

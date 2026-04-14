@@ -4,8 +4,13 @@ import os
 import json
 import time
 import faiss
-from ml.features import FEATURE_DIM, FRAME_FEATURE_DIM, add_wrist_velocity
+from ml.features import (
+    FEATURE_DIM, FRAME_FEATURE_DIM, add_wrist_velocity,
+    to_right_dominant, both_hands_missing, interpolate_holes,
+)
 from ml.constants import TEMPLATE_DIR, INDEX_PATH, METADATA_PATH, DATA_DIR
+
+MAX_BOTH_HANDS_MISSING = 3
 
 SUMMARY_DIM = 4 * FEATURE_DIM
 
@@ -39,7 +44,16 @@ def build_index():
             template = np.load(path)
             if template.shape[1] not in (FRAME_FEATURE_DIM, FEATURE_DIM):
                 continue
-            # Add wrist velocity if not already present
+            # Strip velocity if present so quality/laterality checks see raw 171 dims
+            if template.shape[1] == FEATURE_DIM:
+                template = template[:, :FRAME_FEATURE_DIM]
+            # Quality filter: skip templates with too many blind frames
+            if both_hands_missing(template) > MAX_BOTH_HANDS_MISSING:
+                continue
+            # Fill mid-sequence detection holes via interpolation
+            template = interpolate_holes(template)
+            # Canonicalize laterality, then re-add wrist velocity
+            template = to_right_dominant(template)
             template = add_wrist_velocity(template)
             summary = compute_summary(template)
             summaries.append(summary)
