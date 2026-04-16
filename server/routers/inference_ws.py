@@ -17,8 +17,17 @@ from ml.features import FRAME_FEATURE_DIM
 router = APIRouter()
 
 # Use phonological RF when trained; otherwise fall back to KNN+DTW.
-USE_PHONO = os.environ.get('USE_PHONO', '1') != '0'
-engine = PhonoEngine() if USE_PHONO else InferenceEngine()
+ENGINE_KIND = os.environ.get('ENGINE', 'ensemble').lower()
+if ENGINE_KIND == 'ensemble':
+    from ml.ensemble_engine import EnsembleEngine
+    engine = EnsembleEngine(phono_weight=0.5, raw_weight=0.5)
+elif ENGINE_KIND == 'raw_rf':
+    from ml.raw_rf_engine import RawRfEngine
+    engine = RawRfEngine()
+elif ENGINE_KIND == 'dtw':
+    engine = InferenceEngine()
+else:
+    engine = PhonoEngine()
 
 PAUSE_THRESHOLD = 1.2        # seconds without hand = failsafe finalize
 REST_WRIST_Y = 0.8           # wrist y (in body frame, shoulder-normalised) ≥ this

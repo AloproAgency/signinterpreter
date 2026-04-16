@@ -22,6 +22,8 @@ sys.path.insert(0, ROOT)
 from ml.mediapipe_service import MediaPipeService
 from ml.inference_engine import InferenceEngine, SignSegmenter
 from ml.phono_engine import PhonoEngine
+from ml.raw_rf_engine import RawRfEngine
+from ml.ensemble_engine import EnsembleEngine
 from ml.constants import THRESHOLD, TEMPLATE_DIR
 
 
@@ -67,7 +69,10 @@ def main():
     parser.add_argument('--threshold', type=float, default=THRESHOLD)
     parser.add_argument('--max-videos', type=int, default=0,
                         help='Limit videos per word (0 = all)')
-    parser.add_argument('--engine', choices=('phono', 'dtw'), default='phono')
+    parser.add_argument('--engine', choices=('phono', 'dtw', 'raw_rf', 'ensemble'),
+                        default='phono')
+    parser.add_argument('--phono-weight', type=float, default=0.5,
+                        help='Ensemble weight on the phono engine (raw gets 1 - this)')
     args = parser.parse_args()
 
     if not os.path.isdir(args.sl):
@@ -79,7 +84,15 @@ def main():
     print(f'Words in templates: {words}\n')
 
     mp_service = MediaPipeService()
-    engine = PhonoEngine() if args.engine == 'phono' else InferenceEngine()
+    if args.engine == 'phono':
+        engine = PhonoEngine()
+    elif args.engine == 'raw_rf':
+        engine = RawRfEngine()
+    elif args.engine == 'ensemble':
+        w = max(0.0, min(1.0, args.phono_weight))
+        engine = EnsembleEngine(phono_weight=w, raw_weight=1.0 - w)
+    else:
+        engine = InferenceEngine()
     engine.load()
     if not engine.loaded:
         print(f'ERROR: {args.engine} engine could not load.')

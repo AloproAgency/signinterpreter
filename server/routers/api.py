@@ -226,10 +226,16 @@ def build_index(db: Session = Depends(get_db)):
     # 2) Retrain the Phono Random Forest on the current templates.
     from ml import phono_trainer
     try:
-        phono_info = phono_trainer.fit_and_save()
-        result['phono'] = phono_info
+        result['phono'] = phono_trainer.fit_and_save()
     except Exception as e:
         result['phono_error'] = str(e)
+
+    # 3) Retrain the flat-joint Random Forest too (used by the ensemble engine).
+    from ml import raw_rf_trainer
+    try:
+        result['raw_rf'] = raw_rf_trainer.fit_and_save()
+    except Exception as e:
+        result['raw_rf_error'] = str(e)
 
     build = IndexBuild(
         n_words=result.get('n_words', 0),

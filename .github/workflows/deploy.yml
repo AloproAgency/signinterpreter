@@ -161,6 +161,14 @@ jobs:
               [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/phono/$(basename $f)"
             done
           fi
+
+          # Link flat-joint Random Forest (used by the ensemble engine)
+          if [ -d "$SHARED_DIR/data/rf_raw" ]; then
+            mkdir -p "$NEW_RELEASE/data/rf_raw"
+            for f in "$SHARED_DIR/data/rf_raw"/*; do
+              [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/rf_raw/$(basename $f)"
+            done
+          fi
           if [ -f "$SHARED_DIR/signinterpreter.db" ]; then
             ln -sfn "$SHARED_DIR/signinterpreter.db" "$NEW_RELEASE/server/signinterpreter.db"
           fi
