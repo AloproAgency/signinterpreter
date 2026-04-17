@@ -7,18 +7,24 @@ import { HolisticLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { extractFeatures, hasHandVisible } from '../lib/features';
 import type { HolisticResult } from '../lib/features';
 
-// Staleness detection: if the wrist position barely changes over N consecutive
-// frames, MediaPipe's VIDEO tracker is likely stuck on a frozen prediction
-// (user left the frame, got occluded, etc.) — force handVisible=false.
-const STALE_MOTION_THRESHOLD = 0.0015;   // image-normalised units per frame
-const STALE_FRAMES_LIMIT = 20;           // ~670 ms at 30 FPS
+// Staleness detection: if NEITHER the wrist position NOR any hand landmark
+// changes over N consecutive frames, MediaPipe's VIDEO tracker is stuck on
+// a frozen prediction (user left the frame, got occluded, etc.) — force
+// handVisible=false. We include the full hand landmarks so a static-hold
+// sign (e.g. pointing at the chest while fingers shape) doesn't look stale.
+const STALE_MOTION_THRESHOLD = 0.002;    // mean L1 delta across all tracked landmarks
+const STALE_FRAMES_LIMIT = 30;           // ~1000 ms at 30 FPS
 
 export function useMediaPipe() {
   const landmarkerRef = useRef<HolisticLandmarker | null>(null);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const lastTimestampRef = useRef(0);
-  const prevWristRef = useRef<{ lw: number[] | null; rw: number[] | null }>({ lw: null, rw: null });
+  const prevLandmarksRef = useRef<{
+    wrists: number[] | null;       // flat [lw_x, lw_y, lw_z, rw_x, rw_y, rw_z]
+    lhHand: number[] | null;       // 21 × 3 flat
+    rhHand: number[] | null;
+  }>({ wrists: null, lhHand: null, rhHand: null });
   const staleFramesRef = useRef(0);
 
   const init = useCallback(async () => {
@@ -95,28 +101,56 @@ export function useMediaPipe() {
         handVisible = hasHandVisible(result);
       }
 
-      // Staleness check: if the dominant wrist hasn't moved for ~670 ms,
-      // MediaPipe's tracker is stuck. Override to hand gone.
-      if (handVisible && poseRaw && poseRaw.length >= 17) {
-        const lw: number[] = [poseRaw[15].x, poseRaw[15].y, poseRaw[15].z ?? 0];
-        const rw: number[] = [poseRaw[16].x, poseRaw[16].y, poseRaw[16].z ?? 0];
-        const d = (a: number[] | null, b: number[] | null) =>
-          !a || !b ? Infinity : Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-        const lwDelta = d(lw, prevWristRef.current.lw);
-        const rwDelta = d(rw, prevWristRef.current.rw);
-        const maxDelta = Math.max(lwDelta, rwDelta);
-        if (maxDelta < STALE_MOTION_THRESHOLD) {
+      // Staleness check: build a flat vector of (wrists + every hand landmark)
+      // and compute its L1 delta vs the previous frame. When ALL of these are
+      // frozen for ~1 s, MediaPipe is stuck — override to hand gone.
+      // Including hand landmarks means static-wrist signs (fingers moving)
+      // keep handVisible true.
+      const flatten = (arr: any[] | undefined) =>
+        arr ? arr.flatMap((lm: any) => [lm.x, lm.y, lm.z ?? 0]) : null;
+
+      let wrists: number[] | null = null;
+      if (poseRaw && poseRaw.length >= 17) {
+        wrists = [
+          poseRaw[15].x, poseRaw[15].y, poseRaw[15].z ?? 0,
+          poseRaw[16].x, poseRaw[16].y, poseRaw[16].z ?? 0,
+        ];
+      }
+      const lhRaw = mpResult.leftHandLandmarks?.[0] as any[] | undefined;
+      const rhRaw = mpResult.rightHandLandmarks?.[0] as any[] | undefined;
+      const lhHand = flatten(lhRaw);
+      const rhHand = flatten(rhRaw);
+
+      if (handVisible && wrists) {
+        const meanAbsDelta = (a: number[] | null, b: number[] | null) => {
+          if (!a || !b || a.length !== b.length) return null;
+          let s = 0;
+          for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+          return s / a.length;
+        };
+        const deltas: number[] = [];
+        const p = prevLandmarksRef.current;
+        const w = meanAbsDelta(wrists, p.wrists);
+        if (w !== null) deltas.push(w);
+        const lh = meanAbsDelta(lhHand, p.lhHand);
+        if (lh !== null) deltas.push(lh);
+        const rh = meanAbsDelta(rhHand, p.rhHand);
+        if (rh !== null) deltas.push(rh);
+
+        // Staleness = MAX delta (if ANY part moves, we're not stuck).
+        const motion = deltas.length ? Math.max(...deltas) : Infinity;
+        if (motion < STALE_MOTION_THRESHOLD) {
           staleFramesRef.current += 1;
         } else {
           staleFramesRef.current = 0;
         }
-        prevWristRef.current = { lw, rw };
+        prevLandmarksRef.current = { wrists, lhHand, rhHand };
         if (staleFramesRef.current >= STALE_FRAMES_LIMIT) {
           handVisible = false;
         }
       } else {
         staleFramesRef.current = 0;
-        prevWristRef.current = { lw: null, rw: null };
+        prevLandmarksRef.current = { wrists: null, lhHand: null, rhHand: null };
       }
 
       return { features, handVisible, result };
