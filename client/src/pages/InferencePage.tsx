@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useWebcam } from '../hooks/useWebcam';
 import { useInference } from '../hooks/useInference';
+import { useSpeech } from '../hooks/useSpeech';
 import { useMediaPipe } from '../hooks/useMediaPipe';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useApp } from '../lib/context';
 import {
   Video, Wifi, WifiOff, Trash2, Activity,
   Copy, Settings2, Maximize, Minimize,
-  Zap, Send, Type, Loader2,
+  Zap, Send, Type, Loader2, Volume2, VolumeX,
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -24,6 +25,8 @@ export default function InferencePage() {
   // Otherwise fall back to the raw sign sequence so the user can still read it.
   const TRANSLATION_MIN_SCORE = 0.7;
   const { addToast } = useApp();
+  const speech = useSpeech();
+  const lastSpokenRef = useRef<number>(0);
 
   const [showSettings, setShowSettings] = useState(false);
   const [threshold, setThresholdLocal] = useState(0.8);
@@ -43,6 +46,21 @@ export default function InferencePage() {
       behavior: 'smooth',
     });
   }, [phrases.length, translated]);
+
+  // Speak each newly finalized phrase (only high-confidence ones).
+  useEffect(() => {
+    if (phrases.length <= lastSpokenRef.current) {
+      lastSpokenRef.current = Math.min(lastSpokenRef.current, phrases.length);
+      return;
+    }
+    const idx = phrases.length - 1;
+    const text = phrases[idx];
+    const score = phraseScores[idx] ?? 0;
+    if (text && score >= TRANSLATION_MIN_SCORE) {
+      speech.speak(text);
+    }
+    lastSpokenRef.current = phrases.length;
+  }, [phrases, phraseScores, speech]);
 
   const handleStart = useCallback(async () => {
     await initMediaPipe();
@@ -76,11 +94,17 @@ export default function InferencePage() {
     }
   }, []);
 
+  const handleClear = useCallback(() => {
+    speech.cancel();
+    lastSpokenRef.current = 0;
+    clearSentence();
+  }, [clearSentence, speech]);
+
   const shortcuts = useMemo(() => ({
-    ' ': clearSentence,
+    ' ': handleClear,
     'f': toggleFullscreen,
     'Enter': finalizeSentence,
-  }), [clearSentence, toggleFullscreen, finalizeSentence]);
+  }), [handleClear, toggleFullscreen, finalizeSentence]);
   useKeyboardShortcuts(shortcuts);
 
   const handleThresholdChange = (value: number) => {
@@ -114,6 +138,18 @@ export default function InferencePage() {
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {speech.available && (
+              <button
+                onClick={() => speech.setEnabled(!speech.enabled)}
+                className={`p-2 rounded-md transition-colors ${speech.enabled
+                  ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
+                  : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333]'
+                }`}
+                title={speech.enabled ? 'Couper la lecture vocale' : 'Activer la lecture vocale'}
+              >
+                {speech.enabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
+            )}
             <button
               onClick={copyAll}
               disabled={isEmpty}
@@ -123,7 +159,7 @@ export default function InferencePage() {
               <Copy className="w-4 h-4" />
             </button>
             <button
-              onClick={clearSentence}
+              onClick={handleClear}
               disabled={isEmpty}
               className="p-2 rounded-md text-[#656d76] dark:text-[#8b949e] hover:text-[#ef4444] hover:bg-[#ef4444]/10 disabled:opacity-30 disabled:cursor-not-allowed"
               title="Effacer (Espace)"
