@@ -84,10 +84,17 @@ async def inference_websocket(ws: WebSocket):
         if not current_signs:
             return
         signs = list(current_signs)
+        original = list(current_signs)
         if translator.loaded and len(signs) >= 3:
             signs, removed = translator.prune_intruders(signs, min_gain=0.15, min_keep=1)
             if removed:
-                print(f'[prune] dropped {removed} from {current_signs} -> {signs}')
+                print(f'[prune] dropped {removed} from {original} -> {signs}')
+        if translator.loaded and len(signs) >= 2:
+            # Search for a better ordering that maximises sentence fluency.
+            reordered, swapped = translator.reorder_signs(signs, min_gain=0.1)
+            if swapped:
+                print(f'[reorder] {signs} -> {reordered}')
+                signs = reordered
         if translator.loaded and signs:
             phrase = translator.translate(signs)
             score = translation_confidence(translator.score_signs(signs))

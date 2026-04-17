@@ -176,6 +176,59 @@ class Translator:
             signs = signs[:best_idx] + signs[best_idx + 1:]
         return signs, removed
 
+    def reorder_signs(self, signs_list, min_gain=0.1, max_iter=40):
+        """
+        Find the sign ordering that maximises the translator log-score.
+
+        - For short sequences (len ≤ 6, ≤ 720 permutations) we enumerate all of
+          them (still only a few hundred forward passes of a small LSTM).
+        - Otherwise we fall back to repeated greedy *adjacent-swap* moves
+          (bubble-sort with the score as comparator) for O(N²) complexity.
+
+        Only accepts the new order if it beats the baseline by `min_gain`.
+        Returns (best_sequence, swapped: bool).
+        """
+        if not self.loaded or len(signs_list) < 2:
+            return list(signs_list), False
+
+        baseline_score = self.score_signs(signs_list)
+
+        if len(signs_list) <= 6:
+            from itertools import permutations
+            best = tuple(signs_list)
+            best_score = baseline_score
+            for perm in permutations(signs_list):
+                if perm == tuple(signs_list):
+                    continue
+                s = self.score_signs(list(perm))
+                if s > best_score:
+                    best_score = s
+                    best = perm
+            if best_score - baseline_score > min_gain and tuple(best) != tuple(signs_list):
+                return list(best), True
+            return list(signs_list), False
+
+        # Greedy adjacent swaps for longer sequences
+        seq = list(signs_list)
+        current = baseline_score
+        improved = True
+        iters = 0
+        any_swap = False
+        while improved and iters < max_iter:
+            improved = False
+            for i in range(len(seq) - 1):
+                candidate = seq[:i] + [seq[i + 1], seq[i]] + seq[i + 2:]
+                s = self.score_signs(candidate)
+                if s - current > min_gain / 5:  # smaller per-step gain OK
+                    seq = candidate
+                    current = s
+                    improved = True
+                    any_swap = True
+            iters += 1
+        if any_swap and current - baseline_score > min_gain:
+            return seq, True
+        return list(signs_list), False
+
     def translate(self, signs_list):
         """
         Translate a list of sign words to a French sentence.
