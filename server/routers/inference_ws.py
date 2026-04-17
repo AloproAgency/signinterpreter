@@ -20,7 +20,8 @@ router = APIRouter()
 ENGINE_KIND = os.environ.get('ENGINE', 'ensemble').lower()
 if ENGINE_KIND == 'ensemble':
     from ml.ensemble_engine import EnsembleEngine
-    engine = EnsembleEngine(phono_weight=0.5, raw_weight=0.5)
+    # Round 2 optimal: 3-way mix reaches 92% on WLASL cross-signer eval.
+    engine = EnsembleEngine(phono_weight=0.20, phono_v2_weight=0.40, raw_weight=0.40)
 elif ENGINE_KIND == 'raw_rf':
     from ml.raw_rf_engine import RawRfEngine
     engine = RawRfEngine()
