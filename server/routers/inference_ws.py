@@ -35,6 +35,34 @@ REST_WRIST_Y = 0.8           # wrist y (in body frame, shoulder-normalised) ≥ 
                              # means the wrist is clearly below the shoulders
 REST_MOTION_MAX = 0.02       # hand motion must be below this to count as "rest"
 REST_FRAMES = 5              # consecutive at-rest frames before finalising (≈170 ms)
+
+# ─────────────── Inference-time rejection gates ───────────────
+# Each gate can be disabled by setting its env var to "0".
+# Gate 1 — stricter softmax threshold (prob >= value to accept).
+GATE_PROB_MIN = float(os.environ.get('GATE_PROB_MIN', '0.55'))
+# Gate 2 — confidence margin (prob[top1] - prob[top2] >= value).
+GATE_MARGIN_MIN = float(os.environ.get('GATE_MARGIN_MIN', '0.15'))
+# Gate 3 — temporal consistency (last N intermediate predictions must
+# agree with the final ≥ AGREE_MIN times). Disabled when AGREE_MIN == 0.
+GATE_TEMPORAL_WINDOW = int(os.environ.get('GATE_TEMPORAL_WINDOW', '3'))
+GATE_TEMPORAL_AGREE_MIN = int(os.environ.get('GATE_TEMPORAL_AGREE_MIN', '1'))
+
+
+def _reject_reasons(best_dist, top_k, intermediate_history):
+    """Return a list of active rejection reasons ([] = accept)."""
+    import math as _math
+    reasons = []
+    # Gate 1: absolute probability
+    p_top = _math.exp(-best_dist) if best_dist is not None else 0.0
+    if p_top < GATE_PROB_MIN:
+        reasons.append(f'prob {p_top:.2f} < {GATE_PROB_MIN}')
+    # Gate 2: margin vs #2
+    if GATE_MARGIN_MIN > 0 and len(top_k) >= 2:
+        p2 = _math.exp(-top_k[1][0])
+        margin = p_top - p2
+        if margin < GATE_MARGIN_MIN:
+            reasons.append(f'margin {margin:.2f} < {GATE_MARGIN_MIN}')
+    return reasons, p_top
 # Indices of the wrist y coordinate in the 171-dim feature vector
 # (UPPER_BODY_LANDMARKS layout: l_wrist is pose-index 9, r_wrist is 10 → y = idx*3+1)
 LW_Y_IDX, RW_Y_IDX = 9 * 3 + 1, 10 * 3 + 1
@@ -121,6 +149,9 @@ async def inference_websocket(ws: WebSocket):
     rest_streak = 0                 # consecutive at-rest frames (hands low + idle)
     HAND_LOSS_GRACE = 10            # ~330 ms at 30 FPS (tolerate motion blur)
     ABSOLUTE_IDLE_TIMEOUT = 3.0     # seconds: unconditional finalize safety-net
+    # Rolling window of the last N intermediate top-1 predictions, used by the
+    # temporal-consistency gate at sign finalisation.
+    intermediate_history = []
 
     try:
         while True:
@@ -247,6 +278,10 @@ async def inference_websocket(ws: WebSocket):
 
                 if best_word:
                     confidence = max(0, 1 - (best_dist / threshold)) if best_dist else 0
+                    # feed the temporal-consistency buffer
+                    intermediate_history.append(best_word)
+                    if len(intermediate_history) > GATE_TEMPORAL_WINDOW:
+                        intermediate_history.pop(0)
                     await ws.send_json({
                         'type': 'prediction',
                         'word': best_word,
@@ -285,7 +320,29 @@ async def inference_websocket(ws: WebSocket):
                         best_dist = new_best[1]
                         inference_ms += int((time.time() - rerank_t0) * 1000)
 
-                if best_word and best_dist is not None and best_dist < threshold:
+                # ---- Inference-time rejection gates (tunable via env vars) ----
+                reasons, _ = _reject_reasons(best_dist, top_k, intermediate_history)
+
+                # Gate 3 — temporal consistency: need AGREE_MIN of the last
+                # intermediate predictions to match the final top-1.
+                if GATE_TEMPORAL_AGREE_MIN > 0 and best_word and intermediate_history:
+                    agree = sum(1 for w in intermediate_history if w == best_word)
+                    if agree < GATE_TEMPORAL_AGREE_MIN:
+                        reasons.append(f'temporal {agree}/{len(intermediate_history)} '
+                                       f'< {GATE_TEMPORAL_AGREE_MIN}')
+
+                accept = (best_word
+                          and best_dist is not None
+                          and best_dist < threshold
+                          and not reasons)
+
+                if reasons and best_word:
+                    print(f'[reject {best_word}] {", ".join(reasons)}')
+
+                # Reset the temporal history once a final decision is made.
+                intermediate_history = []
+
+                if accept:
                     if not current_signs or current_signs[-1] != best_word:
                         current_signs.append(best_word)
                         last_sign_time = now
