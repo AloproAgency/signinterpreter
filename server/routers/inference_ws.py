@@ -116,9 +116,11 @@ async def inference_websocket(ws: WebSocket):
         })
 
     last_hand_time = time.time()   # stamped when the hand first disappears
+    last_sign_time = time.time()   # stamped when a new sign is appended
     hand_missing_streak = 0         # consecutive frames without a hand
     rest_streak = 0                 # consecutive at-rest frames (hands low + idle)
     HAND_LOSS_GRACE = 10            # ~330 ms at 30 FPS (tolerate motion blur)
+    ABSOLUTE_IDLE_TIMEOUT = 3.0     # seconds: unconditional finalize safety-net
 
     try:
         while True:
@@ -176,6 +178,12 @@ async def inference_websocket(ws: WebSocket):
             hand_visible = bool(msg.get('hand_visible', False))
 
             now = time.time()
+
+            # ABSOLUTE failsafe: if no new sign has been added for too long
+            # (e.g. user left the frame and MediaPipe is stuck on a stale
+            # prediction), finalize regardless of any other state.
+            if current_signs and (now - last_sign_time) >= ABSOLUTE_IDLE_TIMEOUT:
+                await _do_finalize()
 
             if not hand_visible:
                 if hand_missing_streak == 0:
@@ -280,6 +288,7 @@ async def inference_websocket(ws: WebSocket):
                 if best_word and best_dist is not None and best_dist < threshold:
                     if not current_signs or current_signs[-1] != best_word:
                         current_signs.append(best_word)
+                        last_sign_time = now
 
                         # Retranslate after every newly-added sign
                         if translator.loaded:
