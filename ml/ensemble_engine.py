@@ -1,45 +1,53 @@
 """
-Ensemble of PhonoEngine (34 semantic features) + RawRfEngine (5310 raw joint features).
+3-way ensemble: PhonoEngine (34-dim) + PhonoV2Engine (60-dim) + RawRfEngine (5310-dim).
 
-Both classifiers produce softmax probabilities over the same set of classes.
-We average (or weight-average) them and pick the argmax.
+The three classifiers produce softmax probabilities over the same class set.
+We sum weighted probabilities and pick the argmax.
 
-Drop-in replacement for the V8 InferenceEngine API.
+Default weights from Round 2 sweep (92.0% WLASL cross-signer):
+  phono_v1 = 0.20, phono_v2 = 0.40, raw = 0.40
 """
 import numpy as np
 
 from ml.phono_engine import PhonoEngine
+from ml.phono_v2_engine import PhonoV2Engine
 from ml.raw_rf_engine import RawRfEngine
 from ml.constants import SEQUENCE_LENGTH
 from ml.inference_engine import resample_sequence, SignSegmenter  # noqa: F401 reused
 from ml.phono_features import phonological_descriptor
+from ml.phono_features_v2 import phonological_descriptor_v2
 
 
 class EnsembleEngine:
-    def __init__(self, phono_weight=0.5, raw_weight=0.5):
+    def __init__(self, phono_weight=0.20, phono_v2_weight=0.40, raw_weight=0.40):
         self.phono = PhonoEngine()
+        self.phono_v2 = PhonoV2Engine()
         self.raw = RawRfEngine()
         self.phono_weight = float(phono_weight)
+        self.phono_v2_weight = float(phono_v2_weight)
         self.raw_weight = float(raw_weight)
         self.classes = []
         self.loaded = False
 
     def load(self):
         self.phono.load()
+        self.phono_v2.load()
         self.raw.load()
-        if not (self.phono.loaded and self.raw.loaded):
-            print('WARNING: at least one member of the ensemble failed to load.')
-            self.loaded = self.phono.loaded or self.raw.loaded
-            # Use whichever loaded for class list
-            self.classes = list(self.phono.classes or self.raw.classes)
+        loaded_members = [m for m in (self.phono, self.phono_v2, self.raw) if m.loaded]
+        if not loaded_members:
+            print('WARNING: no ensemble member could load.')
+            self.loaded = False
             return
-        # Align classes: both must agree
-        if list(self.phono.classes) != list(self.raw.classes):
-            print('WARNING: phono/raw class lists disagree; using phono order.')
-        self.classes = list(self.phono.classes)
+        # Align on whatever class list is available
+        self.classes = list(loaded_members[0].classes)
+        for m in loaded_members[1:]:
+            if list(m.classes) != self.classes:
+                print('WARNING: ensemble members have different class lists.')
         self.loaded = True
         print(f'EnsembleEngine loaded: {len(self.classes)} classes '
-              f'(weights phono={self.phono_weight:.2f} raw={self.raw_weight:.2f})')
+              f'(weights phono={self.phono_weight:.2f} '
+              f'phono_v2={self.phono_v2_weight:.2f} '
+              f'raw={self.raw_weight:.2f})')
 
     def reload(self):
         self.load()
@@ -54,6 +62,12 @@ class EnsembleEngine:
         x = ((desc - self.phono.scaler_mean) / self.phono.scaler_std).reshape(1, -1)
         return self.phono.clf.predict_proba(x)[0]
 
+    def _phono_v2_probs(self, query_sequence):
+        q = resample_sequence(query_sequence, SEQUENCE_LENGTH)
+        desc = phonological_descriptor_v2(q)
+        x = ((desc - self.phono_v2.scaler_mean) / self.phono_v2.scaler_std).reshape(1, -1)
+        return self.phono_v2.clf.predict_proba(x)[0]
+
     def _raw_probs(self, query_sequence):
         x = ((self.raw._vectorise(query_sequence) - self.raw.mu) / self.raw.sd).reshape(1, -1)
         return self.raw.clf.predict_proba(x)[0]
@@ -62,25 +76,22 @@ class EnsembleEngine:
         if not self.loaded:
             return None, None, []
 
-        # Fall back to whichever single engine is loaded
-        if not self.phono.loaded:
-            return self.raw.predict(query_sequence)
-        if not self.raw.loaded:
-            return self.phono.predict(query_sequence)
+        probs = np.zeros(len(self.classes), dtype='float32')
+        weight_total = 0.0
 
-        p_phono = self._phono_probs(query_sequence)
-        p_raw = self._raw_probs(query_sequence)
+        if self.phono.loaded:
+            probs += self.phono_weight * self._phono_probs(query_sequence)
+            weight_total += self.phono_weight
+        if self.phono_v2.loaded:
+            probs += self.phono_v2_weight * self._phono_v2_probs(query_sequence)
+            weight_total += self.phono_v2_weight
+        if self.raw.loaded:
+            probs += self.raw_weight * self._raw_probs(query_sequence)
+            weight_total += self.raw_weight
 
-        # Align class indices (both should match; be defensive)
-        if list(self.phono.classes) == list(self.raw.classes):
-            probs = self.phono_weight * p_phono + self.raw_weight * p_raw
-        else:
-            # Map raw probs into phono's class ordering
-            mapped = np.zeros_like(p_phono)
-            for i, c in enumerate(self.raw.classes):
-                if c in self.phono.classes:
-                    mapped[self.phono.classes.index(c)] = p_raw[i]
-            probs = self.phono_weight * p_phono + self.raw_weight * mapped
+        if weight_total <= 0:
+            return None, None, []
+        probs = probs / weight_total
 
         order = np.argsort(probs)[::-1]
         eps = 1e-9

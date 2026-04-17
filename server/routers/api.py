@@ -230,7 +230,14 @@ def build_index(db: Session = Depends(get_db)):
     except Exception as e:
         result['phono_error'] = str(e)
 
-    # 3) Retrain the flat-joint Random Forest too (used by the ensemble engine).
+    # 3) Retrain the extended Phono-v2 Random Forest (60 features, 400 trees).
+    from ml import phono_v2_trainer
+    try:
+        result['phono_v2'] = phono_v2_trainer.fit_and_save()
+    except Exception as e:
+        result['phono_v2_error'] = str(e)
+
+    # 4) Retrain the flat-joint Random Forest (used by the ensemble engine).
     from ml import raw_rf_trainer
     try:
         result['raw_rf'] = raw_rf_trainer.fit_and_save()

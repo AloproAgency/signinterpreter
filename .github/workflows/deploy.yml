@@ -169,6 +169,14 @@ jobs:
               [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/rf_raw/$(basename $f)"
             done
           fi
+
+          # Link Phono-v2 Random Forest (60-dim extended features, 400 trees)
+          if [ -d "$SHARED_DIR/data/phono_v2" ]; then
+            mkdir -p "$NEW_RELEASE/data/phono_v2"
+            for f in "$SHARED_DIR/data/phono_v2"/*; do
+              [ -f "$f" ] && ln -sfn "$f" "$NEW_RELEASE/data/phono_v2/$(basename $f)"
+            done
+          fi
           if [ -f "$SHARED_DIR/signinterpreter.db" ]; then
             ln -sfn "$SHARED_DIR/signinterpreter.db" "$NEW_RELEASE/server/signinterpreter.db"
           fi
