@@ -145,6 +145,10 @@ async def inference_websocket(ws: WebSocket):
     ABSOLUTE_IDLE_TIMEOUT = 5.0     # seconds: last-resort finalize safety-net;
                                     # only fires when the segmenter is also idle
     segmenter_is_signing = False    # mirror of last seg_result (used by idle timeout)
+    # Intermediate-prediction stability: require 2 consecutive intermediates
+    # of the same word before promoting to current_signs (anti-oscillation).
+    last_intermediate_word = None
+    intermediate_consistent_count = 0
 
     try:
         while True:
@@ -307,11 +311,19 @@ async def inference_websocket(ws: WebSocket):
                         'is_final': False,
                     })
 
-                    # Promote the intermediate prediction to the live phrase
-                    # with the same duplicate-only rule as the final path.
-                    # Keeps the transcript reacting in real time while the user
-                    # signs, without waiting for the segmenter to emit sign_ended.
-                    if not current_signs or current_signs[-1] != best_word:
+                    # Anti-oscillation stability: require 2 consecutive
+                    # intermediates of the same word before promoting.
+                    # Without this, fast word-swapping in the classifier
+                    # (e.g. bonjour → oui → bonjour) would inject every
+                    # flicker into the phrase.
+                    if best_word == last_intermediate_word:
+                        intermediate_consistent_count += 1
+                    else:
+                        last_intermediate_word = best_word
+                        intermediate_consistent_count = 1
+
+                    if (intermediate_consistent_count >= 2
+                            and (not current_signs or current_signs[-1] != best_word)):
                         current_signs.append(best_word)
                         last_sign_time = now
                         await ws.send_json({
