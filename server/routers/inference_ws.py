@@ -77,27 +77,39 @@ async def inference_websocket(ws: WebSocket):
         import math
         return max(0.0, min(1.0, math.exp(max(-3.0, logp_per_sign))))
 
+    # When the greedy LM score of the raw sequence is already this plausible,
+    # running prune_intruders (O(N²) scorings) and reorder_signs (up to N!
+    # scorings for N≤6) is wasted work — skip both and go straight to translate.
+    FAST_PATH_SCORE = -0.20
+
     async def _do_finalize():
-        """Prune outlier signs, translate the cleaned sequence, push to
+        """Prune outlier signs, optionally reorder, translate, push to
         completed_phrases and broadcast the update."""
         nonlocal current_signs
         if not current_signs:
             return
         signs = list(current_signs)
         original = list(current_signs)
-        if translator.loaded and len(signs) >= 3:
-            signs, removed = translator.prune_intruders(signs, min_gain=0.15, min_keep=1)
-            if removed:
-                print(f'[prune] dropped {removed} from {original} -> {signs}')
-        if translator.loaded and len(signs) >= 2:
-            # Search for a better ordering that maximises sentence fluency.
-            reordered, swapped = translator.reorder_signs(signs, min_gain=0.1)
-            if swapped:
-                print(f'[reorder] {signs} -> {reordered}')
-                signs = reordered
+
+        # Fast path: if the sequence already scores well, skip the expensive
+        # prune + reorder search (saves 0.5–2 s on plausible short phrases).
+        baseline = translator.score_signs(signs) if translator.loaded else 0.0
+        if translator.loaded and baseline < FAST_PATH_SCORE:
+            if len(signs) >= 3:
+                signs, removed = translator.prune_intruders(signs, min_gain=0.15, min_keep=1)
+                if removed:
+                    print(f'[prune] dropped {removed} from {original} -> {signs}')
+            if len(signs) >= 2:
+                reordered, swapped = translator.reorder_signs(signs, min_gain=0.1)
+                if swapped:
+                    print(f'[reorder] {signs} -> {reordered}')
+                    signs = reordered
+
         if translator.loaded and signs:
             phrase = translator.translate(signs)
-            score = translation_confidence(translator.score_signs(signs))
+            # Re-score after any pruning/reordering to report the final quality
+            final_logp = translator.score_signs(signs) if signs != original else baseline
+            score = translation_confidence(final_logp)
         else:
             phrase = ' '.join(signs)
             score = 1.0
@@ -290,21 +302,17 @@ async def inference_websocket(ws: WebSocket):
                         current_signs.append(best_word)
                         last_sign_time = now
 
-                        # Retranslate after every newly-added sign
-                        if translator.loaded:
-                            translated = translator.translate(current_signs)
-                            translated_score = round(
-                                translation_confidence(translator.score_signs(current_signs)), 2
-                            )
-                        else:
-                            translated = ' '.join(current_signs)
-                            translated_score = 1.0
-
+                        # Do NOT re-translate on every new sign — each
+                        # translator.translate() takes ~300 ms (autoregressive
+                        # greedy LSTM) and would dominate the perceived
+                        # latency. The French phrase is computed once in
+                        # _do_finalize() when the phrase ends; until then we
+                        # show the raw sign sequence as the user types.
                         await ws.send_json({
                             'type': 'sentence_update',
                             'sentence': list(current_signs),
-                            'translated': translated,
-                            'translated_score': translated_score,
+                            'translated': '',
+                            'translated_score': 0,
                             'phrases': completed_phrases,
                             'phrase_signs': completed_signs,
                             'phrase_scores': completed_scores,
