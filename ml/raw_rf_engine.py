@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 
 from ml.constants import DATA_DIR, SEQUENCE_LENGTH
-from ml.inference_engine import resample_sequence, SignSegmenter  # noqa: F401 reused
+from ml.segmenter import resample_sequence, SignSegmenter  # noqa: F401 reused
 from ml.features import (
     FRAME_FEATURE_DIM, interpolate_holes, to_right_dominant, add_wrist_velocity,
 )

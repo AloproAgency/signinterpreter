@@ -1,14 +1,15 @@
 """WebSocket endpoint for real-time inference.
 
 MediaPipe runs client-side (browser). The client sends 171-float feature vectors
-as JSON messages; the server only handles segmentation, kNN lookup, and translation.
+as JSON messages; the server does segmentation + RF ensemble classification +
+translation.
 """
 import json
 import os
 import time
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ml.inference_engine import InferenceEngine, SignSegmenter
+from ml.segmenter import SignSegmenter
 from ml.phono_engine import PhonoEngine
 from ml.translator import get_translator
 from ml.constants import THRESHOLD
@@ -16,7 +17,8 @@ from ml.features import FRAME_FEATURE_DIM
 
 router = APIRouter()
 
-# Use phonological RF when trained; otherwise fall back to KNN+DTW.
+# Production engine is the 3-way RF ensemble. ENGINE env var allows switching
+# to a single-model variant for benchmarking.
 ENGINE_KIND = os.environ.get('ENGINE', 'ensemble').lower()
 if ENGINE_KIND == 'ensemble':
     from ml.ensemble_engine import EnsembleEngine
@@ -25,8 +27,6 @@ if ENGINE_KIND == 'ensemble':
 elif ENGINE_KIND == 'raw_rf':
     from ml.raw_rf_engine import RawRfEngine
     engine = RawRfEngine()
-elif ENGINE_KIND == 'dtw':
-    engine = InferenceEngine()
 else:
     engine = PhonoEngine()
 

@@ -20,7 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from ml.mediapipe_service import MediaPipeService
-from ml.inference_engine import InferenceEngine, SignSegmenter
+from ml.segmenter import SignSegmenter
 from ml.phono_engine import PhonoEngine
 from ml.raw_rf_engine import RawRfEngine
 from ml.ensemble_engine import EnsembleEngine
@@ -69,10 +69,10 @@ def main():
     parser.add_argument('--threshold', type=float, default=THRESHOLD)
     parser.add_argument('--max-videos', type=int, default=0,
                         help='Limit videos per word (0 = all)')
-    parser.add_argument('--engine', choices=('phono', 'dtw', 'raw_rf', 'ensemble'),
-                        default='phono')
-    parser.add_argument('--phono-weight', type=float, default=0.5,
-                        help='Ensemble weight on the phono engine (raw gets 1 - this)')
+    parser.add_argument('--engine', choices=('phono', 'raw_rf', 'ensemble'),
+                        default='ensemble')
+    parser.add_argument('--phono-weight', type=float, default=0.2,
+                        help='Ensemble weight on phono v1 (phono_v2 and raw share the remainder 50/50)')
     args = parser.parse_args()
 
     if not os.path.isdir(args.sl):
@@ -88,11 +88,10 @@ def main():
         engine = PhonoEngine()
     elif args.engine == 'raw_rf':
         engine = RawRfEngine()
-    elif args.engine == 'ensemble':
-        w = max(0.0, min(1.0, args.phono_weight))
-        engine = EnsembleEngine(phono_weight=w, raw_weight=1.0 - w)
-    else:
-        engine = InferenceEngine()
+    else:  # ensemble
+        w1 = max(0.0, min(1.0, args.phono_weight))
+        rest = (1.0 - w1) / 2
+        engine = EnsembleEngine(phono_weight=w1, phono_v2_weight=rest, raw_weight=rest)
     engine.load()
     if not engine.loaded:
         print(f'ERROR: {args.engine} engine could not load.')

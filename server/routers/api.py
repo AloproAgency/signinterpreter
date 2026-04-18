@@ -8,8 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from server.database import get_db, Word, Contribution, IndexBuild
 from sqlalchemy.orm import Session
-from ml import template_manager, index_builder
-from ml.inference_engine import InferenceEngine
+from ml import template_manager
 from server.routers.inference_ws import get_engine
 from server.config import ADMIN_PASSWORD, TEMPLATE_DIR, REFERENCE_DATASET
 
@@ -219,42 +218,36 @@ def admin_login(data: AdminLogin):
 def build_index(db: Session = Depends(get_db)):
     import time
     t0 = time.time()
+    result = {'status': 'success'}
 
-    # 1) Rebuild the FAISS index (used by the DTW fallback engine).
-    result = index_builder.build_index()
-
-    # 2) Retrain the Phono Random Forest on the current templates.
-    from ml import phono_trainer
+    # Retrain the 3 Random Forests of the production ensemble.
+    from ml import phono_trainer, phono_v2_trainer, raw_rf_trainer
     try:
         result['phono'] = phono_trainer.fit_and_save()
     except Exception as e:
-        result['phono_error'] = str(e)
-
-    # 3) Retrain the extended Phono-v2 Random Forest (60 features, 400 trees).
-    from ml import phono_v2_trainer
+        result['phono_error'] = str(e); result['status'] = 'failed'
     try:
         result['phono_v2'] = phono_v2_trainer.fit_and_save()
     except Exception as e:
-        result['phono_v2_error'] = str(e)
-
-    # 4) Retrain the flat-joint Random Forest (used by the ensemble engine).
-    from ml import raw_rf_trainer
+        result['phono_v2_error'] = str(e); result['status'] = 'failed'
     try:
         result['raw_rf'] = raw_rf_trainer.fit_and_save()
     except Exception as e:
-        result['raw_rf_error'] = str(e)
+        result['raw_rf_error'] = str(e); result['status'] = 'failed'
 
+    n_templates = (result.get('phono') or {}).get('n_templates', 0)
+    n_classes = (result.get('phono') or {}).get('n_classes', 0)
     build = IndexBuild(
-        n_words=result.get('n_words', 0),
-        n_templates=result.get('n_templates', 0),
-        summary_dim=result.get('summary_dim', 0),
-        status=result.get('status', 'failed'),
-        duration_ms=result.get('duration_ms', 0) or int((time.time() - t0) * 1000),
+        n_words=n_classes,
+        n_templates=n_templates,
+        summary_dim=0,
+        status=result['status'],
+        duration_ms=int((time.time() - t0) * 1000),
     )
     db.add(build)
     db.commit()
 
-    # 3) Reload the live inference engine (picks up new RF + classes).
+    # Reload the live inference engine (picks up the new RFs + classes).
     eng = get_engine()
     eng.reload()
 

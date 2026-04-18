@@ -8,7 +8,5 @@ tensorflow==2.16.2
 opencv-python
 numpy
 scikit-learn
-faiss-cpu
-fastdtw
 scipy
 kagglehub

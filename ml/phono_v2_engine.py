@@ -11,7 +11,7 @@ import pickle
 import numpy as np
 
 from ml.constants import DATA_DIR, SEQUENCE_LENGTH
-from ml.inference_engine import resample_sequence  # reused
+from ml.segmenter import resample_sequence  # reused
 from ml.phono_features_v2 import phonological_descriptor_v2, PHONO_DIM_V2  # noqa: F401
 
 PHONO_V2_DIR = os.path.join(DATA_DIR, 'phono_v2')

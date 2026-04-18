@@ -13,7 +13,7 @@ from ml.phono_engine import PhonoEngine
 from ml.phono_v2_engine import PhonoV2Engine
 from ml.raw_rf_engine import RawRfEngine
 from ml.constants import SEQUENCE_LENGTH
-from ml.inference_engine import resample_sequence, SignSegmenter  # noqa: F401 reused
+from ml.segmenter import resample_sequence, SignSegmenter  # noqa: F401 reused
 from ml.phono_features import phonological_descriptor
 from ml.phono_features_v2 import phonological_descriptor_v2
 

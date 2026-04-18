@@ -1,4 +1,4 @@
-"""V8 SignInterpreter - Configuration"""
+"""V8 SignInterpreter - server-level configuration (paths, secrets, CORS)."""
 import os
 import sys
 
@@ -15,30 +15,9 @@ for p in [ROOT_DIR, ML_DIR]:
 
 # Paths
 TEMPLATE_DIR = os.path.join(DATA_DIR, 'templates')
-INDEX_PATH = os.path.join(DATA_DIR, 'faiss.index')
-METADATA_PATH = os.path.join(DATA_DIR, 'metadata.json')
 CONTRIBUTIONS_DIR = os.path.join(DATA_DIR, 'contributions')
 DB_PATH = os.path.join(SERVER_DIR, 'signinterpreter.db')
 REFERENCE_DATASET = os.path.join(os.path.dirname(ROOT_DIR), 'SL')
-
-# ML constants
-SEQUENCE_LENGTH = 30
-PREFILTER_TOP = 30
-K = 11
-THRESHOLD = 0.8  # Phono: -log(prob), accept when prob >= exp(-0.8) ≈ 0.45
-SMOOTH_ALPHA = 0.7
-MOTION_START_THRESHOLD = 0.04
-MOTION_END_THRESHOLD = 0.025
-MOTION_END_FRAMES = 3
-MIN_SIGN_FRAMES = 4
-MAX_SIGN_FRAMES = 60
-PREDICT_AFTER_N_FRAMES = 8
-PREDICT_EVERY_N_FRAMES = 3
-WEIGHT_POWER = 2.0
-
-# WebSocket
-FRAME_RATE = 15
-JPEG_QUALITY = 70
 
 # Admin
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '12345678')

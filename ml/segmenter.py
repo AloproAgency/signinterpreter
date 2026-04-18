@@ -1,55 +1,20 @@
-"""Inference engine wrapping DTW + FAISS + KNN."""
-import numpy as np
-import os
-import json
-import faiss
-from fastdtw import fastdtw
-from scipy.spatial.distance import euclidean
-from ml.features import (
-    FEATURE_DIM, add_wrist_velocity, to_right_dominant, both_hands_missing,
-    interpolate_holes,
-)
+"""Sign segmentation state-machine + utility for temporal resampling.
 
-# Templates with too many frames missing both hands are filtered out at load time.
-MAX_BOTH_HANDS_MISSING = 3
+Previously lived in ml/inference_engine.py alongside the now-removed KNN+DTW
+fallback. Extracted here so the production path (SignSegmenter + resample)
+has no KNN/FAISS/fastdtw dependency.
+"""
+import numpy as np
+
 from ml.constants import (
-    INDEX_PATH, METADATA_PATH, TEMPLATE_DIR,
-    SEQUENCE_LENGTH, PREFILTER_TOP, K, THRESHOLD,
     SMOOTH_ALPHA, MOTION_START_THRESHOLD, MOTION_END_THRESHOLD,
     MOTION_END_FRAMES, MIN_SIGN_FRAMES, MAX_SIGN_FRAMES,
-    PREDICT_AFTER_N_FRAMES, PREDICT_EVERY_N_FRAMES, WEIGHT_POWER, DATA_DIR,
+    PREDICT_AFTER_N_FRAMES, PREDICT_EVERY_N_FRAMES,
 )
-
-# Uniform temporal weights (no frame is privileged)
-FRAME_WEIGHTS = np.ones((SEQUENCE_LENGTH, 1), dtype='float32')
-
-# Per-channel weights — boost finger shape so it dominates the DTW distance.
-# Layout (FEATURE_DIM = 177): pose[0:39], LH shape[39:102], LH palm[102:105],
-# RH shape[105:168], RH palm[168:171], wrist velocity[171:177].
-HAND_SHAPE_BOOST = 3.0
-CHANNEL_WEIGHTS = np.ones(FEATURE_DIM, dtype='float32')
-CHANNEL_WEIGHTS[39:102] = HAND_SHAPE_BOOST   # left hand shape
-CHANNEL_WEIGHTS[105:168] = HAND_SHAPE_BOOST  # right hand shape
-
-# Drop the Z coordinate of finger landmarks (depth from single camera is unreliable).
-# Hand shape = 21 landmarks × (x, y, z) flattened. Z indices = 2, 5, 8, ..., 62 within each block.
-for base in (39, 105):
-    for k in range(21):
-        CHANNEL_WEIGHTS[base + k * 3 + 2] = 0.0
-
-CHANNEL_SQRT = np.sqrt(CHANNEL_WEIGHTS)
-
-
-def compute_summary(template):
-    return np.concatenate([
-        template.mean(axis=0),
-        template.std(axis=0),
-        template[0],
-        template[-1],
-    ]).astype('float32')
 
 
 def resample_sequence(sequence, target_length):
+    """Linearly resample a (T, D) sequence to exactly `target_length` frames."""
     seq = np.asarray(sequence, dtype='float32')
     n = len(seq)
     if n == target_length:
@@ -62,117 +27,6 @@ def resample_sequence(sequence, target_length):
     for f in range(seq.shape[1]):
         out[:, f] = np.interp(new_idx, old_idx, seq[:, f])
     return out
-
-
-class InferenceEngine:
-    def __init__(self):
-        self.index = None
-        self.metadata = None
-        self.templates = None
-        self.words = []
-        self.loaded = False
-
-    def load(self):
-        if not os.path.exists(INDEX_PATH) or not os.path.exists(METADATA_PATH):
-            print("WARNING: FAISS index not found. Build it first.")
-            self.loaded = False
-            return
-
-        try:
-            self.index = faiss.read_index(INDEX_PATH)
-            with open(METADATA_PATH, 'r') as f:
-                self.metadata = json.load(f)
-
-            if not self.metadata:
-                print("WARNING: No templates in metadata.")
-                self.loaded = False
-                return
-
-            self.templates = []
-            valid_metadata = []
-            n_filtered_quality = 0
-            n_mirrored = 0
-            for m in self.metadata:
-                path = m['path']
-                if not os.path.isabs(path):
-                    path = os.path.join(DATA_DIR, path)
-                if not os.path.exists(path):
-                    continue  # skip missing files
-                tpl = np.load(path)
-                # A) quality filter — drop templates with too many frames where both hands are missing
-                if both_hands_missing(tpl) > MAX_BOTH_HANDS_MISSING:
-                    n_filtered_quality += 1
-                    continue
-                # B) fill mid-sequence detection holes via interpolation
-                tpl = interpolate_holes(tpl[:, :FEATURE_DIM] if tpl.shape[1] > 171 else tpl)
-                # C) canonicalize laterality — always put the dominant hand on the right
-                tpl_canon = to_right_dominant(tpl)
-                if not np.array_equal(tpl_canon, tpl):
-                    n_mirrored += 1
-                self.templates.append(add_wrist_velocity(tpl_canon))
-                valid_metadata.append(m)
-
-            self.metadata = valid_metadata
-            print(f'  filtered (low quality): {n_filtered_quality}, mirrored to right-dominant: {n_mirrored}')
-
-            if not self.templates:
-                print("WARNING: No valid templates found.")
-                self.loaded = False
-                return
-
-            self.words = sorted(set(m['word'] for m in self.metadata))
-            self.loaded = True
-            print(f"InferenceEngine loaded: {len(self.words)} words, {len(self.templates)} templates")
-        except Exception as e:
-            print(f"ERROR loading engine: {e}")
-            self.loaded = False
-
-    def reload(self):
-        self.load()
-
-    def predict(self, query_sequence):
-        """
-        Predict sign from a sequence of features.
-        query_sequence: list of feature vectors (variable length)
-        Returns: (best_word, best_distance, top_k_list)
-        """
-        if not self.loaded:
-            return None, None, []
-
-        # Resample to SEQUENCE_LENGTH then add wrist velocity
-        query = resample_sequence(query_sequence, SEQUENCE_LENGTH)
-        query = interpolate_holes(query)
-        query = to_right_dominant(query)
-        query = add_wrist_velocity(query)
-        query_summary = compute_summary(query).reshape(1, -1)
-
-        # FAISS pre-filter
-        n_search = min(PREFILTER_TOP, self.index.ntotal)
-        _, indices = self.index.search(query_summary, n_search)
-
-        # Weighted DTW (frame × channel weighting)
-        frame_sqrt = np.sqrt(FRAME_WEIGHTS)
-        weighted_query = query * frame_sqrt * CHANNEL_SQRT
-        dtw_results = []
-        for idx in indices[0]:
-            if idx < 0:
-                continue
-            weighted_template = self.templates[idx] * frame_sqrt * CHANNEL_SQRT
-            d, _ = fastdtw(weighted_query, weighted_template, dist=euclidean)
-            dtw_results.append((d, self.metadata[idx]['word']))
-
-        if not dtw_results:
-            return None, None, []
-
-        dtw_results.sort(key=lambda x: x[0])
-        top_k = dtw_results[:K]
-
-        votes = {}
-        for d, w in top_k:
-            votes[w] = votes.get(w, 0) + 1
-        best_word = max(votes, key=votes.get)
-        best_distance = min(d for d, w in top_k if w == best_word)
-        return best_word, best_distance, top_k
 
 
 class SignSegmenter:

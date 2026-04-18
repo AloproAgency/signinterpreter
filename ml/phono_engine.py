@@ -11,7 +11,7 @@ import pickle
 import numpy as np
 
 from ml.constants import DATA_DIR, SEQUENCE_LENGTH
-from ml.inference_engine import resample_sequence, SignSegmenter  # noqa: F401  reused
+from ml.segmenter import resample_sequence, SignSegmenter  # noqa: F401  reused
 from ml.features import both_hands_missing
 from ml.phono_features import phonological_descriptor, PHONO_DIM
 
