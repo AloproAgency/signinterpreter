@@ -9,7 +9,13 @@ import os
 import time
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from ml.segmenter import SignSegmenter
+from ml.segmenter import SignSegmenter as HeuristicSignSegmenter
+from ml.enriched_segmenter import EnrichedSignSegmenter
+
+# Segmenter selection. Default is the enriched version (linguistic +
+# biomechanical signals); fall back to the motion-energy heuristic via env.
+SEGMENTER_KIND = os.environ.get('SEGMENTER', 'enriched').lower()
+SignSegmenter = EnrichedSignSegmenter if SEGMENTER_KIND == 'enriched' else HeuristicSignSegmenter
 from ml.phono_engine import PhonoEngine
 from ml.translator import get_translator
 from ml.constants import THRESHOLD
