@@ -34,10 +34,11 @@ PAUSE_THRESHOLD = 1.2        # seconds without hand = failsafe finalize
 REST_WRIST_Y = 0.8           # wrist y (in body frame, shoulder-normalised) ≥ this
                              # means the wrist is clearly below the shoulders
 REST_MOTION_MAX = 0.02       # hand motion must be below this to count as "rest"
-REST_FRAMES = 15             # consecutive at-rest frames before finalising (≈500 ms)
-REST_MIN_GAP_SINCE_LAST_SIGN = 0.6  # s — don't trigger rest-line-break right after
-                                    # a sign is appended (natural hands-down between
-                                    # two signs would otherwise fire it).
+REST_FRAMES = 3              # consecutive at-rest frames before finalising (≈100 ms)
+                             # — hand dropped below shoulders + idle = done,
+                             # translate immediately. Small value = snappy
+                             # line break; user is expected to keep hands up
+                             # between signs of the same phrase.
 # Indices of the wrist y coordinate in the 171-dim feature vector
 # (UPPER_BODY_LANDMARKS layout: l_wrist is pose-index 9, r_wrist is 10 → y = idx*3+1)
 LW_Y_IDX, RW_Y_IDX = 9 * 3 + 1, 10 * 3 + 1
@@ -251,9 +252,7 @@ async def inference_websocket(ws: WebSocket):
             else:
                 rest_streak = 0
 
-            if (current_signs
-                    and rest_streak >= REST_FRAMES
-                    and (now - last_sign_time) >= REST_MIN_GAP_SINCE_LAST_SIGN):
+            if current_signs and rest_streak >= REST_FRAMES:
                 await _do_finalize()
                 rest_streak = 0
 
