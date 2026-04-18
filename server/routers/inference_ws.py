@@ -34,7 +34,10 @@ PAUSE_THRESHOLD = 1.2        # seconds without hand = failsafe finalize
 REST_WRIST_Y = 0.8           # wrist y (in body frame, shoulder-normalised) ≥ this
                              # means the wrist is clearly below the shoulders
 REST_MOTION_MAX = 0.02       # hand motion must be below this to count as "rest"
-REST_FRAMES = 5              # consecutive at-rest frames before finalising (≈170 ms)
+REST_FRAMES = 15             # consecutive at-rest frames before finalising (≈500 ms)
+REST_MIN_GAP_SINCE_LAST_SIGN = 0.6  # s — don't trigger rest-line-break right after
+                                    # a sign is appended (natural hands-down between
+                                    # two signs would otherwise fire it).
 # Indices of the wrist y coordinate in the 171-dim feature vector
 # (UPPER_BODY_LANDMARKS layout: l_wrist is pose-index 9, r_wrist is 10 → y = idx*3+1)
 LW_Y_IDX, RW_Y_IDX = 9 * 3 + 1, 10 * 3 + 1
@@ -132,7 +135,9 @@ async def inference_websocket(ws: WebSocket):
     hand_missing_streak = 0         # consecutive frames without a hand
     rest_streak = 0                 # consecutive at-rest frames (hands low + idle)
     HAND_LOSS_GRACE = 10            # ~330 ms at 30 FPS (tolerate motion blur)
-    ABSOLUTE_IDLE_TIMEOUT = 3.0     # seconds: unconditional finalize safety-net
+    ABSOLUTE_IDLE_TIMEOUT = 5.0     # seconds: last-resort finalize safety-net;
+                                    # only fires when the segmenter is also idle
+    segmenter_is_signing = False    # mirror of last seg_result (used by idle timeout)
 
     try:
         while True:
@@ -191,10 +196,14 @@ async def inference_websocket(ws: WebSocket):
 
             now = time.time()
 
-            # ABSOLUTE failsafe: if no new sign has been added for too long
-            # (e.g. user left the frame and MediaPipe is stuck on a stale
-            # prediction), finalize regardless of any other state.
-            if current_signs and (now - last_sign_time) >= ABSOLUTE_IDLE_TIMEOUT:
+            # ABSOLUTE failsafe: only if the segmenter is NOT mid-sign AND no
+            # new sign has been added for a long time (user genuinely stopped /
+            # MediaPipe stuck on a stale prediction). Gating on segmenter state
+            # prevents cutting a long ongoing sign that hasn't been committed
+            # yet.
+            if (current_signs
+                    and not segmenter_is_signing
+                    and (now - last_sign_time) >= ABSOLUTE_IDLE_TIMEOUT):
                 await _do_finalize()
 
             if not hand_visible:
@@ -228,18 +237,23 @@ async def inference_websocket(ws: WebSocket):
             hand_missing_streak = 0
 
             seg_result = segmenter.process_features(features)
+            segmenter_is_signing = seg_result['is_signing']
 
             # Rest-posture phrase boundary: when both wrists drop below the
             # shoulder line and motion is low, the signer is at rest → end
-            # of phrase. Triggers only after we actually have some signs and
-            # the segmenter isn't mid-sign.
+            # of phrase. Triggers only after we actually have some signs, the
+            # segmenter isn't mid-sign, and enough time has passed since the
+            # last committed sign (hands naturally drop for a moment between
+            # signs of the same phrase; don't treat that as a line break).
             if (not seg_result['is_signing']
                     and _is_at_rest(features, seg_result['motion_energy'])):
                 rest_streak += 1
             else:
                 rest_streak = 0
 
-            if current_signs and rest_streak >= REST_FRAMES:
+            if (current_signs
+                    and rest_streak >= REST_FRAMES
+                    and (now - last_sign_time) >= REST_MIN_GAP_SINCE_LAST_SIGN):
                 await _do_finalize()
                 rest_streak = 0
 

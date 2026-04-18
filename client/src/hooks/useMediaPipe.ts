@@ -13,7 +13,12 @@ import type { HolisticResult } from '../lib/features';
 // handVisible=false. We include the full hand landmarks so a static-hold
 // sign (e.g. pointing at the chest while fingers shape) doesn't look stale.
 const STALE_MOTION_THRESHOLD = 0.002;    // mean L1 delta across all tracked landmarks
-const STALE_FRAMES_LIMIT = 30;           // ~1000 ms at 30 FPS
+const STALE_FRAMES_LIMIT = 90;           // ~3000 ms at 30 FPS. Signs with a
+                                         // static hold phase (pointing, G-handshape
+                                         // pause) can look frozen for ~1 s; we
+                                         // only want to fire on truly stuck
+                                         // MediaPipe predictions (user gone for
+                                         // several seconds).
 
 export function useMediaPipe() {
   const landmarkerRef = useRef<HolisticLandmarker | null>(null);
