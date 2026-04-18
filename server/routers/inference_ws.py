@@ -234,21 +234,20 @@ async def inference_websocket(ws: WebSocket):
                     # otherwise a user ending their phrase by dropping the
                     # hand would lose the last sign they made.
                     pending = list(getattr(segmenter, 'sign_buffer', []) or [])
-                    if getattr(segmenter, 'is_signing', False) and len(pending) >= 4:
+                    if getattr(segmenter, 'is_signing', False) and pending:
                         bw, bd, tk = eng.predict(pending)
-                        if bw and bd is not None and bd < threshold:
-                            if not current_signs or current_signs[-1] != bw:
-                                current_signs.append(bw)
-                                last_sign_time = now
-                                await ws.send_json({
-                                    'type': 'sentence_update',
-                                    'sentence': list(current_signs),
-                                    'translated': '',
-                                    'translated_score': 0,
-                                    'phrases': completed_phrases,
-                                    'phrase_signs': completed_signs,
-                                    'phrase_scores': completed_scores,
-                                })
+                        if bw and (not current_signs or current_signs[-1] != bw):
+                            current_signs.append(bw)
+                            last_sign_time = now
+                            await ws.send_json({
+                                'type': 'sentence_update',
+                                'sentence': list(current_signs),
+                                'translated': '',
+                                'translated_score': 0,
+                                'phrases': completed_phrases,
+                                'phrase_signs': completed_signs,
+                                'phrase_scores': completed_scores,
+                            })
                     segmenter.reset()
                     await ws.send_json({
                         'type': 'status',
@@ -335,26 +334,22 @@ async def inference_websocket(ws: WebSocket):
                         best_dist = new_best[1]
                         inference_ms += int((time.time() - rerank_t0) * 1000)
 
-                if best_word and best_dist is not None and best_dist < threshold:
-                    if not current_signs or current_signs[-1] != best_word:
-                        current_signs.append(best_word)
-                        last_sign_time = now
+                if best_word and (not current_signs or current_signs[-1] != best_word):
+                    current_signs.append(best_word)
+                    last_sign_time = now
 
-                        # Do NOT re-translate on every new sign — each
-                        # translator.translate() takes ~300 ms (autoregressive
-                        # greedy LSTM) and would dominate the perceived
-                        # latency. The French phrase is computed once in
-                        # _do_finalize() when the phrase ends; until then we
-                        # show the raw sign sequence as the user types.
-                        await ws.send_json({
-                            'type': 'sentence_update',
-                            'sentence': list(current_signs),
-                            'translated': '',
-                            'translated_score': 0,
-                            'phrases': completed_phrases,
-                            'phrase_signs': completed_signs,
-                            'phrase_scores': completed_scores,
-                        })
+                    # No confidence gating — only rejection is the
+                    # no-consecutive-duplicate check above. Translation is
+                    # deferred to _do_finalize() at end-of-phrase.
+                    await ws.send_json({
+                        'type': 'sentence_update',
+                        'sentence': list(current_signs),
+                        'translated': '',
+                        'translated_score': 0,
+                        'phrases': completed_phrases,
+                        'phrase_signs': completed_signs,
+                        'phrase_scores': completed_scores,
+                    })
 
                 if best_word:
                     confidence = max(0, 1 - (best_dist / threshold)) if best_dist else 0
