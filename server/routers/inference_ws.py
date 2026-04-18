@@ -307,6 +307,23 @@ async def inference_websocket(ws: WebSocket):
                         'is_final': False,
                     })
 
+                    # Promote the intermediate prediction to the live phrase
+                    # with the same duplicate-only rule as the final path.
+                    # Keeps the transcript reacting in real time while the user
+                    # signs, without waiting for the segmenter to emit sign_ended.
+                    if not current_signs or current_signs[-1] != best_word:
+                        current_signs.append(best_word)
+                        last_sign_time = now
+                        await ws.send_json({
+                            'type': 'sentence_update',
+                            'sentence': list(current_signs),
+                            'translated': '',
+                            'translated_score': 0,
+                            'phrases': completed_phrases,
+                            'phrase_signs': completed_signs,
+                            'phrase_scores': completed_scores,
+                        })
+
             # Final prediction (sign ended)
             if seg_result['sign_ended'] and seg_result['ended_buffer']:
                 t0 = time.time()
