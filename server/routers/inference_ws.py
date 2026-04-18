@@ -230,6 +230,25 @@ async def inference_websocket(ws: WebSocket):
                 # Grace period: wait a few blank frames before resetting the
                 # segmenter (MediaPipe often drops the hand for 1–2 frames mid-sign).
                 if hand_missing_streak >= HAND_LOSS_GRACE:
+                    # Before wiping, try to classify the half-built sign —
+                    # otherwise a user ending their phrase by dropping the
+                    # hand would lose the last sign they made.
+                    pending = list(getattr(segmenter, 'sign_buffer', []) or [])
+                    if getattr(segmenter, 'is_signing', False) and len(pending) >= 4:
+                        bw, bd, tk = eng.predict(pending)
+                        if bw and bd is not None and bd < threshold:
+                            if not current_signs or current_signs[-1] != bw:
+                                current_signs.append(bw)
+                                last_sign_time = now
+                                await ws.send_json({
+                                    'type': 'sentence_update',
+                                    'sentence': list(current_signs),
+                                    'translated': '',
+                                    'translated_score': 0,
+                                    'phrases': completed_phrases,
+                                    'phrase_signs': completed_signs,
+                                    'phrase_scores': completed_scores,
+                                })
                     segmenter.reset()
                     await ws.send_json({
                         'type': 'status',
