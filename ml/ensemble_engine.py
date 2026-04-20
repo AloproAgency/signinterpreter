@@ -21,7 +21,7 @@ from ml.rerank import DtwReranker
 
 class EnsembleEngine:
     def __init__(self, phono_weight=0.20, phono_v2_weight=0.40, raw_weight=0.40,
-                 use_rerank: bool = True, rerank_alpha: float = 0.4):
+                 use_rerank: bool = True, rerank_alpha: float = 0.7):
         self.phono = PhonoEngine()
         self.phono_v2 = PhonoV2Engine()
         self.raw = RawRfEngine()
