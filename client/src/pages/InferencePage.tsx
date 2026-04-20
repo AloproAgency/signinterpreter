@@ -395,8 +395,8 @@ export default function InferencePage() {
             )}
           </div>
 
-          {/* Live prediction strip */}
-          {active && prediction && (
+          {/* Live prediction strip — hidden when hand is not visible */}
+          {active && prediction && status.hand_visible && (
             <div className="shrink-0 px-6 md:px-10 py-3 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
               <div className="max-w-2xl mx-auto flex items-center gap-3">
                 <span className="text-sm uppercase tracking-wider font-semibold text-[#8b949e]">
@@ -417,6 +417,33 @@ export default function InferencePage() {
                   {Math.round(prediction.confidence * 100)}%
                 </span>
               </div>
+              {/* Ambiguity strip: if top-1 is uncertain (<75%) AND top-2
+                  is close (dist gap small), show the next 2 candidates
+                  for the user to know the model is hesitating. */}
+              {(() => {
+                const tk = prediction.top_k ?? [];
+                if (tk.length < 2) return null;
+                const top1 = Math.exp(-tk[0].distance);
+                const top2 = Math.exp(-tk[1].distance);
+                const ambiguous = top1 < 0.75 && (top1 - top2) < 0.15;
+                if (!ambiguous) return null;
+                return (
+                  <div className="max-w-2xl mx-auto mt-2 flex items-center gap-2 text-xs">
+                    <span className="text-[#8b949e] uppercase tracking-wider">Aussi possible</span>
+                    {tk.slice(1, 4).map((alt) => {
+                      const p = Math.exp(-alt.distance);
+                      return (
+                        <span
+                          key={alt.word}
+                          className="px-2 py-0.5 rounded-full bg-[#d0d7de]/40 dark:bg-[#30363d]/60 text-[#1f2328] dark:text-[#e6edf3]"
+                        >
+                          {alt.word} <span className="text-[#8b949e] font-mono">{Math.round(p * 100)}%</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </section>

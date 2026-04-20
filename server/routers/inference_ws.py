@@ -11,6 +11,7 @@ import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ml.segmenter import SignSegmenter as HeuristicSignSegmenter
 from ml.enriched_segmenter import EnrichedSignSegmenter
+from ml.hypothesis_tracker import HypothesisTracker
 
 # Segmenter selection. Default is the enriched version (linguistic +
 # biomechanical signals); fall back to the motion-energy heuristic via env.
@@ -36,15 +37,23 @@ elif ENGINE_KIND == 'raw_rf':
 else:
     engine = PhonoEngine()
 
-PAUSE_THRESHOLD = 1.2        # seconds without hand = failsafe finalize
+PAUSE_THRESHOLD = 2.0        # seconds without hand = failsafe finalize. Bumped
+                             # from 1.2 s because MediaPipe briefly loses the
+                             # wrist when the signer transitions between signs
+                             # (body-occluded hand, motion blur) and we don't
+                             # want to line-break mid-phrase.
 REST_WRIST_Y = 0.8           # wrist y (in body frame, shoulder-normalised) ≥ this
                              # means the wrist is clearly below the shoulders
 REST_MOTION_MAX = 0.02       # hand motion must be below this to count as "rest"
-REST_FRAMES = 3              # consecutive at-rest frames before finalising (≈100 ms)
-                             # — hand dropped below shoulders + idle = done,
-                             # translate immediately. Small value = snappy
-                             # line break; user is expected to keep hands up
-                             # between signs of the same phrase.
+REST_FRAMES = 15             # consecutive at-rest frames (~500 ms at 30 FPS)
+                             # before finalising. A brief hand drop between
+                             # two signs of the same phrase is common; we
+                             # only want to line-break when the signer
+                             # clearly parks their hands for half a second.
+REST_MIN_GAP_SINCE_LAST_SIGN = 0.6  # seconds — do not rest-finalize if a sign
+                                    # was committed within this window. Rest
+                                    # right after committing is a transition,
+                                    # not a phrase boundary.
 # Indices of the wrist y coordinate in the 171-dim feature vector
 # (UPPER_BODY_LANDMARKS layout: l_wrist is pose-index 9, r_wrist is 10 → y = idx*3+1)
 LW_Y_IDX, RW_Y_IDX = 9 * 3 + 1, 10 * 3 + 1
@@ -87,39 +96,58 @@ async def inference_websocket(ws: WebSocket):
         import math
         return max(0.0, min(1.0, math.exp(max(-3.0, logp_per_sign))))
 
-    # When the greedy LM score of the raw sequence is already this plausible,
-    # running prune_intruders (O(N²) scorings) and reorder_signs (up to N!
-    # scorings for N≤6) is wasted work — skip both and go straight to translate.
-    FAST_PATH_SCORE = -0.20
+    async def push_sign(word: str):
+        """Append a sign to current_signs and broadcast a sentence_update.
+        Single source of truth — called from the tracker's commit callers.
+
+        Hard invariant: never two identical signs back-to-back. Legitimate
+        repetitions (e.g. emphatic "non non") would require re-initiating
+        the sign clearly; in practice, consecutive duplicates come from
+        tracker / classifier noise and always hurt the translation."""
+        nonlocal current_signs, last_sign_time
+        if not word:
+            return
+        if current_signs and current_signs[-1] == word:
+            return
+        current_signs.append(word)
+        last_sign_time = time.time()
+        await ws.send_json({
+            'type': 'sentence_update',
+            'sentence': list(current_signs),
+            'translated': '',
+            'translated_score': 0,
+            'phrases': completed_phrases,
+            'phrase_signs': completed_signs,
+            'phrase_scores': completed_scores,
+        })
 
     async def _do_finalize():
-        """Prune outlier signs, optionally reorder, translate, push to
-        completed_phrases and broadcast the update."""
+        """Flush tracker, translate, push to completed_phrases.
+
+        Note: prune_intruders / reorder_signs are intentionally *not* called.
+        The HypothesisTracker now prevents most intruder commits upstream, and
+        the context-rerank on the sign_ended top-k already corrects obvious
+        misclassifications. The LM-greedy prune/reorder passes were rewriting
+        valid sequences and degraded output quality — disabled.
+        """
         nonlocal current_signs
+        pending = tracker.flush()
+        if pending:
+            await push_sign(pending)
+        tracker.reset()
         if not current_signs:
             return
         signs = list(current_signs)
-        original = list(current_signs)
 
-        # Fast path: if the sequence already scores well, skip the expensive
-        # prune + reorder search (saves 0.5–2 s on plausible short phrases).
-        baseline = translator.score_signs(signs) if translator.loaded else 0.0
-        if translator.loaded and baseline < FAST_PATH_SCORE:
-            if len(signs) >= 3:
-                signs, removed = translator.prune_intruders(signs, min_gain=0.15, min_keep=1)
-                if removed:
-                    print(f'[prune] dropped {removed} from {original} -> {signs}')
-            if len(signs) >= 2:
-                reordered, swapped = translator.reorder_signs(signs, min_gain=0.1)
-                if swapped:
-                    print(f'[reorder] {signs} -> {reordered}')
-                    signs = reordered
-
-        if translator.loaded and signs:
+        # Single-sign phrases bypass the translator: no grammar rewriting to
+        # do, and the LSTM tends to over-embellish a lone gloss. Return the
+        # raw sign with full confidence.
+        if len(signs) < 2:
+            phrase = signs[0]
+            score = 1.0
+        elif translator.loaded:
             phrase = translator.translate(signs)
-            # Re-score after any pruning/reordering to report the final quality
-            final_logp = translator.score_signs(signs) if signs != original else baseline
-            score = translation_confidence(final_logp)
+            score = translation_confidence(translator.score_signs(signs))
         else:
             phrase = ' '.join(signs)
             score = 1.0
@@ -145,10 +173,9 @@ async def inference_websocket(ws: WebSocket):
     ABSOLUTE_IDLE_TIMEOUT = 5.0     # seconds: last-resort finalize safety-net;
                                     # only fires when the segmenter is also idle
     segmenter_is_signing = False    # mirror of last seg_result (used by idle timeout)
-    # Intermediate-prediction stability: require 2 consecutive intermediates
-    # of the same word before promoting to current_signs (anti-oscillation).
-    last_intermediate_word = None
-    intermediate_consistent_count = 0
+    # Hypothesis tracker: commits a word only on transitions between stable
+    # hypotheses. Filters classifier oscillation without ad-hoc cooldowns.
+    tracker = HypothesisTracker()
 
     try:
         while True:
@@ -173,6 +200,7 @@ async def inference_websocket(ws: WebSocket):
                 completed_phrases = []
                 completed_signs = []
                 completed_scores = []
+                tracker.reset()
                 await ws.send_json({
                     'type': 'sentence_update',
                     'sentence': [],
@@ -234,24 +262,21 @@ async def inference_websocket(ws: WebSocket):
                 # Grace period: wait a few blank frames before resetting the
                 # segmenter (MediaPipe often drops the hand for 1–2 frames mid-sign).
                 if hand_missing_streak >= HAND_LOSS_GRACE:
-                    # Before wiping, try to classify the half-built sign —
-                    # otherwise a user ending their phrase by dropping the
-                    # hand would lose the last sign they made.
+                    # Before wiping, try to classify the half-built sign and
+                    # feed the tracker one last time so the in-flight
+                    # hypothesis gets committed rather than lost.
                     pending = list(getattr(segmenter, 'sign_buffer', []) or [])
                     if getattr(segmenter, 'is_signing', False) and pending:
-                        bw, bd, tk = eng.predict(pending)
-                        if bw and (not current_signs or current_signs[-1] != bw):
-                            current_signs.append(bw)
-                            last_sign_time = now
-                            await ws.send_json({
-                                'type': 'sentence_update',
-                                'sentence': list(current_signs),
-                                'translated': '',
-                                'translated_score': 0,
-                                'phrases': completed_phrases,
-                                'phrase_signs': completed_signs,
-                                'phrase_scores': completed_scores,
-                            })
+                        bw, _bd, _tk = eng.predict(pending)
+                        # Soft-vote mode: the tracker uses the full top-K
+                        # distribution instead of a hard top-1 label.
+                        to_commit = tracker.observe(bw, top_k=_tk)
+                        if to_commit:
+                            await push_sign(to_commit)
+                    tail = tracker.flush()
+                    if tail:
+                        await push_sign(tail)
+                    tracker.reset()
                     segmenter.reset()
                     await ws.send_json({
                         'type': 'status',
@@ -280,7 +305,9 @@ async def inference_websocket(ws: WebSocket):
             else:
                 rest_streak = 0
 
-            if current_signs and rest_streak >= REST_FRAMES:
+            if (current_signs
+                    and rest_streak >= REST_FRAMES
+                    and (now - last_sign_time) >= REST_MIN_GAP_SINCE_LAST_SIGN):
                 await _do_finalize()
                 rest_streak = 0
 
@@ -311,30 +338,14 @@ async def inference_websocket(ws: WebSocket):
                         'is_final': False,
                     })
 
-                    # Anti-oscillation stability: require 2 consecutive
-                    # intermediates of the same word before promoting.
-                    # Without this, fast word-swapping in the classifier
-                    # (e.g. bonjour → oui → bonjour) would inject every
-                    # flicker into the phrase.
-                    if best_word == last_intermediate_word:
-                        intermediate_consistent_count += 1
-                    else:
-                        last_intermediate_word = best_word
-                        intermediate_consistent_count = 1
-
-                    if (intermediate_consistent_count >= 2
-                            and (not current_signs or current_signs[-1] != best_word)):
-                        current_signs.append(best_word)
-                        last_sign_time = now
-                        await ws.send_json({
-                            'type': 'sentence_update',
-                            'sentence': list(current_signs),
-                            'translated': '',
-                            'translated_score': 0,
-                            'phrases': completed_phrases,
-                            'phrase_signs': completed_signs,
-                            'phrase_scores': completed_scores,
-                        })
+                    # Feed the tracker. It commits a word only when a
+                    # stable hypothesis transitions to a different stable
+                    # hypothesis — oscillations cancel themselves out.
+                    # Top-K soft-vote mode: a persistent #2 with broad
+                    # support across frames can outpace a noisy top-1.
+                    to_commit = tracker.observe(best_word, top_k=top_k)
+                    if to_commit:
+                        await push_sign(to_commit)
 
             # Final prediction (sign ended)
             if seg_result['sign_ended'] and seg_result['ended_buffer']:
@@ -343,16 +354,17 @@ async def inference_websocket(ws: WebSocket):
                 inference_ms = int((time.time() - t0) * 1000)
 
                 # ---- Context rerank via the seq2seq translator (implicit LM) ----
-                # Only rerank when the classifier is uncertain (prob < 0.7) and
-                # we already have at least one prior sign. Rescored log-score:
+                # Widened from top-3 to top-5 to match the ~80% top-5 recall
+                # of the ensemble.  Rescored log-score:
                 #     score = log(P_clf) + LM_LAMBDA * log(P_translator)
                 LM_LAMBDA = 0.3
                 CERTAINTY_CUTOFF = 0.7
+                LM_K = 5   # number of candidates to rescore
                 if (best_word and translator.loaded and current_signs
                         and len(top_k) >= 2 and np.exp(-best_dist) < CERTAINTY_CUTOFF):
                     rerank_t0 = time.time()
                     rescored = []
-                    for cand_dist, cand_word in top_k[:3]:
+                    for cand_dist, cand_word in top_k[: LM_K]:
                         clf_logp = -cand_dist
                         lm_logp = translator.score_signs(current_signs + [cand_word])
                         rescored.append((clf_logp + LM_LAMBDA * lm_logp, cand_dist, cand_word))
@@ -363,22 +375,16 @@ async def inference_websocket(ws: WebSocket):
                         best_dist = new_best[1]
                         inference_ms += int((time.time() - rerank_t0) * 1000)
 
-                if best_word and (not current_signs or current_signs[-1] != best_word):
-                    current_signs.append(best_word)
-                    last_sign_time = now
-
-                    # No confidence gating — only rejection is the
-                    # no-consecutive-duplicate check above. Translation is
-                    # deferred to _do_finalize() at end-of-phrase.
-                    await ws.send_json({
-                        'type': 'sentence_update',
-                        'sentence': list(current_signs),
-                        'translated': '',
-                        'translated_score': 0,
-                        'phrases': completed_phrases,
-                        'phrase_signs': completed_signs,
-                        'phrase_scores': completed_scores,
-                    })
+                # The segmenter just signalled the end of a sign → push
+                # this last observation through the tracker, then flush so
+                # the in-flight hypothesis is committed before the next sign.
+                if best_word:
+                    to_commit = tracker.observe(best_word, top_k=top_k)
+                    if to_commit:
+                        await push_sign(to_commit)
+                    tail = tracker.flush()
+                    if tail:
+                        await push_sign(tail)
 
                 if best_word:
                     confidence = max(0, 1 - (best_dist / threshold)) if best_dist else 0

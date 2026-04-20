@@ -16,10 +16,12 @@ from ml.constants import SEQUENCE_LENGTH
 from ml.segmenter import resample_sequence, SignSegmenter  # noqa: F401 reused
 from ml.phono_features import phonological_descriptor
 from ml.phono_features_v2 import phonological_descriptor_v2
+from ml.rerank import DtwReranker
 
 
 class EnsembleEngine:
-    def __init__(self, phono_weight=0.20, phono_v2_weight=0.40, raw_weight=0.40):
+    def __init__(self, phono_weight=0.20, phono_v2_weight=0.40, raw_weight=0.40,
+                 use_rerank: bool = True, rerank_alpha: float = 0.4):
         self.phono = PhonoEngine()
         self.phono_v2 = PhonoV2Engine()
         self.raw = RawRfEngine()
@@ -28,6 +30,13 @@ class EnsembleEngine:
         self.raw_weight = float(raw_weight)
         self.classes = []
         self.loaded = False
+        # Top-K DTW re-ranker — leverages the ensemble's high top-5 recall
+        # by recomparing the query to the prototypes of the top-K candidate
+        # classes using trajectory-level DTW.  See ml/rerank.py.
+        self.use_rerank = bool(use_rerank)
+        self.reranker: DtwReranker | None = (
+            DtwReranker(alpha=rerank_alpha) if use_rerank else None
+        )
 
     def load(self):
         self.phono.load()
@@ -63,6 +72,15 @@ class EnsembleEngine:
               f'(weights phono={self.phono_weight:.2f} '
               f'phono_v2={self.phono_v2_weight:.2f} '
               f'raw={self.raw_weight:.2f})')
+        if self.reranker is not None:
+            try:
+                self.reranker.load()
+                print(f'DtwReranker loaded: {len(self.reranker._by_class)} '
+                      f'class prototype banks.')
+            except Exception as e:
+                print(f'WARNING: DtwReranker disabled ({e})')
+                self.reranker = None
+                self.use_rerank = False
 
     def reload(self):
         self.load()
@@ -134,12 +152,25 @@ class EnsembleEngine:
         order = np.argsort(probs)[::-1]
         eps = 1e-9
         top_k = []
+        ensemble_probs_dict: dict[str, float] = {}
         for idx in order[:5]:
             if probs[idx] <= 0:
                 continue
             word = self.classes[idx]
-            dist = float(-np.log(max(eps, probs[idx])))
+            p = float(probs[idx])
+            ensemble_probs_dict[word] = p
+            dist = float(-np.log(max(eps, p)))
             top_k.append((dist, word))
         if not top_k:
             return None, None, []
+
+        # DTW re-ranking on the top-5 candidates.  Only kicks in when
+        # the reranker is loaded AND when there's a genuine disambiguation
+        # to do (margin between top-1 and top-2 is small enough that a
+        # trajectory-level second opinion is worth the compute).
+        if (self.use_rerank and self.reranker is not None
+                and self.reranker.loaded and len(top_k) >= 2):
+            top_k = self.reranker.rerank(query_sequence, top_k,
+                                         ensemble_probs_dict)
+
         return top_k[0][1], top_k[0][0], top_k

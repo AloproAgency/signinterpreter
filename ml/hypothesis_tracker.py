@@ -45,6 +45,16 @@ predictions count as "real signs".
 """
 
 
+import math
+
+
+def _safe_exp_neg(dist: float) -> float:
+    """exp(-dist) clamped to avoid overflow."""
+    if dist > 50.0:
+        return 0.0
+    return math.exp(-dist)
+
+
 class HypothesisTracker:
     """Track streaming classifier predictions and emit a word only when a
     clear hypothesis *transition* occurs.
@@ -80,20 +90,57 @@ class HypothesisTracker:
         self.hypothesis_streak: int = 0
 
     # ------------------------------------------------------------------
-    def observe(self, predicted_word: str | None) -> str | None:
-        """Feed one prediction. Returns a word to commit NOW (push to
-        current_signs) if a transition from a *stable* previous hypothesis
-        was detected, else None."""
-        if not predicted_word:
-            return None
+    def observe(self, predicted_word: str | None,
+                top_k: list[tuple[float, str]] | None = None) -> str | None:
+        """Feed one prediction.
 
-        # Reinforce the observed candidate, decay every other
-        self.support[predicted_word] = self.support.get(predicted_word, 0.0) + 1.0
-        for w in list(self.support):
-            if w != predicted_word:
-                self.support[w] *= self.decay
-                if self.support[w] < self.prune_below:
-                    del self.support[w]
+        Two modes:
+          1. Legacy (top-1 only): pass `predicted_word` and leave
+             `top_k=None`.  The observed candidate gets +1.0 support,
+             all others decay by `self.decay`.
+          2. Top-K soft mode: pass `top_k = [(dist, word), ...]` as
+             returned by EnsembleEngine.predict (and optionally the
+             reranker).  Each word receives support proportional to
+             its probability (prob = exp(-dist), re-normalised over
+             the top-K list), then all OTHER tracked words decay.
+             The winner uses its probability-weighted support instead
+             of a hard +1.0, so a persistent #2 that never wins top-1
+             can still outpace a noisy top-1 that keeps flipping.
+
+        Returns a word to commit NOW (push to current_signs) if a
+        transition from a *stable* previous hypothesis was detected,
+        else None.
+        """
+        if top_k:
+            # --- top-K soft mode ---
+            # Convert distances (-log p) back to probabilities and
+            # re-normalise over the candidate list so the top-K mass
+            # sums to 1.0.  Classes not in the top-K are implicitly
+            # zero for this frame and will decay.
+            probs = {w: float(_safe_exp_neg(d)) for d, w in top_k}
+            total = sum(probs.values())
+            if total <= 1e-9:
+                return None
+            probs = {w: p / total for w, p in probs.items()}
+            # Reinforce each observed candidate by its share, decay others
+            observed_set = set(probs.keys())
+            for w, p in probs.items():
+                self.support[w] = self.support.get(w, 0.0) + p
+            for w in list(self.support):
+                if w not in observed_set:
+                    self.support[w] *= self.decay
+                    if self.support[w] < self.prune_below:
+                        del self.support[w]
+        else:
+            if not predicted_word:
+                return None
+            # Reinforce the observed candidate, decay every other
+            self.support[predicted_word] = self.support.get(predicted_word, 0.0) + 1.0
+            for w in list(self.support):
+                if w != predicted_word:
+                    self.support[w] *= self.decay
+                    if self.support[w] < self.prune_below:
+                        del self.support[w]
 
         # Who is winning?
         winner = max(self.support, key=self.support.get)
