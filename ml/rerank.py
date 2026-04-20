@@ -208,11 +208,15 @@ class DtwReranker:
         if not self.loaded or not ensemble_top_k:
             return ensemble_top_k
 
-        q_streams = _extract_streams(
-            resample_sequence(query_sequence, SEQUENCE_LENGTH)
-            if query_sequence.shape[0] != SEQUENCE_LENGTH
-            else query_sequence
-        )
+        # Callers may pass a Python list of per-frame feature vectors
+        # (segmenter buffer) OR an already-resampled ndarray.  Normalise.
+        q = np.asarray(query_sequence, dtype=np.float32)
+        if q.ndim != 2 or q.shape[1] < FRAME_FEATURE_DIM:
+            return ensemble_top_k
+        q = q[:, :FRAME_FEATURE_DIM]
+        if q.shape[0] != SEQUENCE_LENGTH:
+            q = resample_sequence(q, SEQUENCE_LENGTH)
+        q_streams = _extract_streams(q)
 
         rescored: List[Tuple[float, str]] = []
         for dist, word in ensemble_top_k:
