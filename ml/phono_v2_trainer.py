@@ -1,4 +1,5 @@
-"""Train the Phono-v2 Random Forest (60 features, 400 trees)."""
+"""Train the Phono-v2 Random Forest (PHONO_DIM_V2 features, 72 after
+v3 directional-movement addition, 400 trees)."""
 import json
 import os
 import pickle
@@ -13,11 +14,15 @@ from ml.phono_v2_engine import PHONO_V2_DIR, MODEL_PATH, META_PATH
 
 
 def load_descriptors(template_dir=TEMPLATE_DIR, max_both_missing=3):
-    classes = sorted(d for d in os.listdir(template_dir)
-                     if os.path.isdir(os.path.join(template_dir, d)))
-    X, y = [], []
+    """Same filtering contract as phono_trainer.load_descriptors: classes
+    with 0 surviving templates are dropped from the returned list AND y
+    is re-labelled densely, so meta['classes'] stays aligned with
+    clf.classes_ after save."""
+    disk_classes = sorted(d for d in os.listdir(template_dir)
+                          if os.path.isdir(os.path.join(template_dir, d)))
+    X, raw_y = [], []
     dropped = 0
-    for ci, word in enumerate(classes):
+    for ci, word in enumerate(disk_classes):
         word_dir = os.path.join(template_dir, word)
         for fn in sorted(os.listdir(word_dir)):
             if not fn.endswith('.npy'):
@@ -35,10 +40,17 @@ def load_descriptors(template_dir=TEMPLATE_DIR, max_both_missing=3):
                 dropped += 1
                 continue
             X.append(phonological_descriptor_v2(raw))
-            y.append(ci)
+            raw_y.append(ci)
     if not X:
         raise RuntimeError('No usable templates for phono-v2.')
-    return np.stack(X).astype('float32'), np.array(y, dtype='int32'), classes, dropped
+    used = sorted(set(raw_y))
+    if len(used) < len(disk_classes):
+        missing = [disk_classes[i] for i in range(len(disk_classes)) if i not in used]
+        print(f'[phono_v2] classes with 0 usable templates, dropped from model: {missing}')
+    remap = {old: new for new, old in enumerate(used)}
+    kept_classes = [disk_classes[i] for i in used]
+    y = np.asarray([remap[v] for v in raw_y], dtype='int32')
+    return np.stack(X).astype('float32'), y, kept_classes, dropped
 
 
 def fit_and_save(n_estimators=400, max_depth=None, seed=42):

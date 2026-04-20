@@ -1,9 +1,16 @@
 """
-Phonological classifier v2: Random Forest on a 60-dim phonological descriptor.
+Phonological classifier v2: Random Forest on a PHONO_DIM_V2-dim
+phonological descriptor (currently 72 dims after v3 directional add).
 
-Same structure as PhonoEngine but uses phonological_descriptor_v2 (extended
-with angular velocities, curvature, autocorrelation, per-finger curls,
-bimanual distances, etc.).
+Same structure as PhonoEngine but uses phonological_descriptor_v2
+(extended with angular velocities, curvature, autocorrelation, per-
+finger curls, bimanual distances, and — v3 — 12 SIGNED directional
+movement features that distinguish signs with identical handshape
+but different motion direction).
+
+NB. Any model pickle trained before the v3 change was fitted with
+60 features.  The engine detects this mismatch at load time and
+refuses to use a stale model rather than crash on predict_proba.
 """
 import json
 import os
@@ -41,6 +48,19 @@ class PhonoV2Engine:
             self.scaler_mean = np.asarray(meta['scaler_mean'], dtype='float32')
             self.scaler_std = np.asarray(meta['scaler_std'], dtype='float32')
             self.scaler_std = np.where(self.scaler_std < 1e-6, 1.0, self.scaler_std)
+
+            # Dim-mismatch guard: the extractor may have grown (e.g. v3
+            # added 12 directional dims → 60→72) since this pickle was
+            # trained.  If so, refuse to serve predictions instead of
+            # crashing inside predict_proba on a shape mismatch.
+            expected = getattr(self.clf, 'n_features_in_', None)
+            if expected is not None and expected != PHONO_DIM_V2:
+                print(f'WARNING: phono v2 model was trained with {expected} '
+                      f'features but extractor now emits {PHONO_DIM_V2}. '
+                      f'Retrain with scripts/train_phono.py before using.')
+                self.loaded = False
+                return
+
             self.loaded = True
             print(f'PhonoV2Engine loaded: {len(self.classes)} classes -> {self.classes}')
         except Exception as e:

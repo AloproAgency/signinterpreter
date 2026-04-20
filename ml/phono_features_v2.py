@@ -11,7 +11,13 @@ Extends the 34-dim base descriptor with ~22 signer-invariant features covering:
  - bimanual enrichment: min-dist, time offset, parallelism (3)
  - elegance: jerk RMS, handshape transition count (2)
 
-Total new: 26. PHONO_DIM_V2 = 34 + 26 = 60.
+Total new: 26. PHONO_DIM_V2 = 34 + 26 + 12 = 72.
+v3 adds 12 signed DIRECTIONAL movement features — net displacement,
+sub-interval displacements (onset / offset), and Lévy areas — because
+every other movement feature was a scalar magnitude invariant to the
+direction of motion.  Two signs with the same handshape that differ
+only in direction (up vs down, clockwise vs counter-clockwise) now
+become linearly separable.
 
 Drop-in replacement for ml.phono_features but NEVER writes to prod paths.
 """
@@ -358,11 +364,193 @@ def _hands_parallelism(wl, wr, both):
 
 
 # ---------------------------------------------------------------------------
+# Signed DIRECTIONAL features (v3 addition — 12 dims)
+# ---------------------------------------------------------------------------
+# Every other movement feature in v1/v2 is a scalar magnitude (path
+# length, speed peaks, PCA eigenvalue angle, ...) and therefore
+# invariant to the direction of motion.  Two signs with the same
+# handshape that differ only in direction ("up vs down", "clockwise
+# vs counter-clockwise") get mapped to almost identical descriptors.
+# These 12 dims are explicitly SIGNED and encode:
+#
+#   * net displacement vector        (dx, dy, dz)             → 3
+#   * onset-third displacement       (start → 1/3 of active)  → 3
+#   * offset-third displacement      (2/3 → end of active)    → 3
+#   * Lévy areas on xy, xz, yz       (chirality / rotation)   → 3
+#
+# All live on the right-dominant wrist (seq is already passed
+# through `to_right_dominant`).  Inactive hands → zeros.
+
+
+def _active_window(track, active):
+    """Return the (T_act, 3) sub-track during the active frames.  If
+    fewer than 2 active frames, returns `None`."""
+    if active.sum() < 2:
+        return None
+    return track[active]
+
+
+def _net_displacement(track):
+    """Signed end-start vector (smoothed over 3 frames at each side)."""
+    n = len(track)
+    if n < 2:
+        return np.zeros(3, dtype='float32')
+    k = min(3, n)
+    start = track[:k].mean(axis=0)
+    end   = track[-k:].mean(axis=0)
+    return (end - start).astype('float32')
+
+
+def _interval_displacement(track, a_frac, b_frac):
+    """Signed displacement vector between the mean of the [a_frac,
+    a_frac+0.1] window and the mean of the [b_frac, b_frac+0.1]
+    window (window size = 10 % of active length, min 2 frames)."""
+    n = len(track)
+    if n < 4:
+        return np.zeros(3, dtype='float32')
+    win = max(2, int(0.10 * n))
+    a0 = max(0, int(a_frac * n))
+    a1 = min(n, a0 + win)
+    b0 = min(n - win, int(b_frac * n))
+    b1 = min(n, b0 + win)
+    start = track[a0:a1].mean(axis=0)
+    end   = track[b0:b1].mean(axis=0)
+    return (end - start).astype('float32')
+
+
+def _levy_area(a, b):
+    """Discrete Lévy area of a 2-D path (a, b) — ½ Σ (a_i·Δb_i −
+    b_i·Δa_i).  Positive ⇒ counter-clockwise rotation of (a, b).
+    Captures the chirality / sense of motion that all magnitude
+    features throw away."""
+    if len(a) < 2:
+        return 0.0
+    da = np.diff(a)
+    db = np.diff(b)
+    return 0.5 * float(np.sum(a[:-1] * db - b[:-1] * da))
+
+
+def _levy_all(track):
+    """Three signed Lévy areas — one per coordinate plane — that
+    together encode 2-D rotation sense in frontal, axial and
+    sagittal projections."""
+    if len(track) < 3:
+        return np.zeros(3, dtype='float32')
+    xy = _levy_area(track[:, 0], track[:, 1])
+    xz = _levy_area(track[:, 0], track[:, 2])
+    yz = _levy_area(track[:, 1], track[:, 2])
+    return np.array([xy, xz, yz], dtype='float32')
+
+
+# ---------------------------------------------------------------------------
+# Per-finger DIRECTION vectors (wrist → fingertip), v3 addition — 15 dims
+# ---------------------------------------------------------------------------
+# The curl angles only say HOW MUCH each finger is bent, not the
+# ORIENTATION in which the finger points.  Two handshapes with
+# identical curl angles but different pointing directions (e.g. index
+# pointing UP vs FORWARD vs DOWN) are phonologically distinct in most
+# sign languages.  These 15 dims are the normalised 3-D direction
+# from the wrist (landmark 0) to each fingertip (landmarks 4, 8, 12,
+# 16, 20) on the CENTRAL active frame.
+#
+# Fingertips × xyz = 5 × 3 = 15 dims.  Signed (unit vector components).
+
+FINGERTIP_IDX = [4, 8, 12, 16, 20]   # thumb, index, middle, ring, pinky
+
+
+def _finger_directions(hand_xyz):
+    """Return (5, 3) unit vectors from wrist (idx 0) to each fingertip.
+    Degenerate fingers (zero-length vector) emit zeros."""
+    wrist = hand_xyz[0]
+    out = np.zeros((5, 3), dtype='float32')
+    for i, tip in enumerate(FINGERTIP_IDX):
+        v = hand_xyz[tip] - wrist
+        n = float(np.linalg.norm(v))
+        if n > 1e-6:
+            out[i] = (v / n).astype('float32')
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Hand / palm rotation signature, v3d — 9 dims
+# ---------------------------------------------------------------------------
+# Problem this block solves:
+#   A sign where the hand stays open and the wrist is stationary looks
+#   identical to one where the hand stays open and the arm rotates
+#   around the wrist — every wrist-translation feature (path length,
+#   dir_net_*, wrist Lévy) is ≈ 0 in both cases, and palm_std_*
+#   captures only the MAGNITUDE of rotation, not its sense.
+#
+# The 9 dims added below are:
+#   palm_delta_x/y/z            end-frame palm-normal minus start-frame
+#                               palm-normal.  Signed — positive vs
+#                               negative rotation give opposite sign.
+#   palm_levy_xy/xz/yz          Lévy area of the palm-normal trajectory
+#                               on each coordinate plane.  Signed —
+#                               clockwise vs counter-clockwise rotation
+#                               give opposite sign.
+#   mtip_levy_xy/xz/yz          Lévy area of the middle-fingertip
+#                               trajectory (landmark 12 relative to
+#                               wrist).  Captures hand rotation even
+#                               when the palm normal barely moves
+#                               (e.g. axial rotation of the forearm).
+#
+# All 9 values → 0 for a static hand and ≠ 0 for any rotation, with
+# explicit signs that encode rotation sense.
+
+MIDTIP_IDX = 12
+
+
+def _signed_delta(a, b):
+    return (b - a).astype('float32')
+
+
+def _palm_rotation_features(seq, rh_active, rh_palm, rh_landmarks):
+    """Compute the 9 palm/hand rotation features for the right hand.
+    Returns a flat 9-vector.  Zeros when the hand is absent or too
+    few active frames are available."""
+    out = np.zeros(9, dtype='float32')
+    if rh_active.sum() < 3:
+        return out
+    act = np.where(rh_active)[0]
+    k = min(3, len(act))
+
+    # Palm-normal trajectory over active frames, re-normalised (palm
+    # vectors are already unit, but averaging will dilute — keep raw).
+    palm = rh_palm[act]
+
+    # Palm delta: end mean minus start mean (signed, 3 dims)
+    palm_s = palm[:k].mean(axis=0)
+    palm_e = palm[-k:].mean(axis=0)
+    out[0:3] = _signed_delta(palm_s, palm_e)
+
+    # Palm Lévy areas on xy/xz/yz planes (signed, 3 dims)
+    out[3] = _levy_area(palm[:, 0], palm[:, 1])
+    out[4] = _levy_area(palm[:, 0], palm[:, 2])
+    out[5] = _levy_area(palm[:, 1], palm[:, 2])
+
+    # Middle-fingertip trajectory RELATIVE TO WRIST (so it's zero when
+    # the whole hand translates rigidly but non-zero when the hand
+    # rotates around the wrist — which is the exact case we want).
+    mtip = rh_landmarks[act, MIDTIP_IDX] - rh_landmarks[act, 0]
+    out[6] = _levy_area(mtip[:, 0], mtip[:, 1])
+    out[7] = _levy_area(mtip[:, 0], mtip[:, 2])
+    out[8] = _levy_area(mtip[:, 1], mtip[:, 2])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Extractor
 # ---------------------------------------------------------------------------
 PHONO_V1_DIM = 34
 PHONO_NEW_DIM = 26
-PHONO_DIM_V2 = PHONO_V1_DIM + PHONO_NEW_DIM  # 60
+PHONO_DIR_DIM      = 12     # v3a: signed wrist displacements + Lévy
+PHONO_FDIR_DIM     = 15     # v3b: per-finger direction at CENTRAL frame
+PHONO_FDIR_SE_DIM  = 30     # v3c: per-finger direction at START + END
+PHONO_ROT_DIM      = 9      # v3d: palm + middle-tip rotation signature
+PHONO_DIM_V2 = (PHONO_V1_DIM + PHONO_NEW_DIM
+                + PHONO_DIR_DIM + PHONO_FDIR_DIM
+                + PHONO_FDIR_SE_DIM + PHONO_ROT_DIM)  # 126
 
 
 def phonological_descriptor_v2(seq):
@@ -600,6 +788,60 @@ def phonological_descriptor_v2(seq):
         transition_count = 0.0
     elegance_v2 = np.array([jerk, transition_count], dtype='float32')
 
+    # --- Directional (signed) movement features — v3 (12 dims) -----------
+    # These are the features that distinguish signs with the same
+    # handshape but different motion direction.  Every element below is
+    # SIGNED (not an absolute value / magnitude).
+    track_act = _active_window(wrist_r, rh_active)
+    if track_act is None:
+        net_disp    = np.zeros(3, dtype='float32')
+        onset_disp  = np.zeros(3, dtype='float32')
+        offset_disp = np.zeros(3, dtype='float32')
+        levy        = np.zeros(3, dtype='float32')
+    else:
+        net_disp    = _net_displacement(track_act)
+        onset_disp  = _interval_displacement(track_act, 0.00, 0.33)
+        offset_disp = _interval_displacement(track_act, 0.66, 1.00)
+        levy        = _levy_all(track_act)
+    directional_v3 = np.concatenate([net_disp, onset_disp,
+                                     offset_disp, levy]).astype('float32')
+
+    # --- Per-finger direction (wrist → fingertip) ----------------------
+    # Three keyframes × 5 fingers × 3 coords = 45 dims total, split as:
+    #   finger_dir       — CENTRAL active frame       (15 dims)
+    #   finger_dir_start — avg of first 3 active fr.  (15 dims)
+    #   finger_dir_end   — avg of last  3 active fr.  (15 dims)
+    # Captures both the static handshape orientation AND any rotation
+    # of the fingers during the sign (e.g. index starts pointing UP,
+    # ends pointing FORWARD).  Each vector is unit-normalised.
+    def _avg_finger_dir(frame_indices):
+        mats = np.stack([_finger_directions(rh_landmarks[i])
+                         for i in frame_indices], axis=0)
+        avg = mats.mean(axis=0)
+        # re-normalise to unit vectors after averaging
+        n = np.linalg.norm(avg, axis=1, keepdims=True)
+        n = np.where(n > 1e-6, n, 1.0)
+        return (avg / n).reshape(-1).astype('float32')
+
+    if rh_active.sum() == 0:
+        finger_dir       = np.zeros(15, dtype='float32')
+        finger_dir_start = np.zeros(15, dtype='float32')
+        finger_dir_end   = np.zeros(15, dtype='float32')
+    else:
+        act_idx = np.where(rh_active)[0]
+        mid = act_idx[len(act_idx) // 2]
+        finger_dir = _finger_directions(rh_landmarks[mid]).reshape(-1)
+        k = min(3, len(act_idx))
+        finger_dir_start = _avg_finger_dir(act_idx[:k])
+        finger_dir_end   = _avg_finger_dir(act_idx[-k:])
+
+    # --- Hand/palm ROTATION signature (9 dims) --------------------------
+    # Signed palm-normal delta + palm Lévy + middle-tip Lévy.  Zero for
+    # a static hand, non-zero (with rotation-direction sign) for any
+    # rotation around the wrist.
+    rotation_v3d = _palm_rotation_features(seq, rh_active, rh_palm,
+                                           rh_landmarks)
+
     descriptor = np.concatenate([
         handshape_feats,   # 6
         location_feats,    # 5
@@ -612,6 +854,11 @@ def phonological_descriptor_v2(seq):
         location_v2,       # 6
         bimanual_v2,       # 3
         elegance_v2,       # 2    -> total new = 26
+        directional_v3,    # 12   -> directional (v3a) = 12
+        finger_dir,        # 15   -> finger direction central (v3b) = 15
+        finger_dir_start,  # 15   -> finger direction start (v3c) = 15
+        finger_dir_end,    # 15   -> finger direction end   (v3c) = 15
+        rotation_v3d,      # 9    -> palm + midtip rotation (v3d) = 9
     ])
     assert descriptor.shape == (PHONO_DIM_V2,), descriptor.shape
     return descriptor.astype('float32')
@@ -639,6 +886,33 @@ PHONO_FEATURE_NAMES_V2 = [
     'loc2_dwell_frac', 'loc2_traj_extent',
     'bm2_min_hands_dist', 'bm2_time_offset', 'bm2_parallelism',
     'elg_jerk_rms', 'elg_hs_transitions',
+    # --- v3a directional (12) — SIGNED direction-of-motion features ---
+    'dir_net_dx',   'dir_net_dy',   'dir_net_dz',
+    'dir_onset_dx', 'dir_onset_dy', 'dir_onset_dz',
+    'dir_off_dx',   'dir_off_dy',   'dir_off_dz',
+    'dir_levy_xy', 'dir_levy_xz', 'dir_levy_yz',
+    # --- v3b per-finger direction CENTRAL (15) — wrist→tip unit vectors
+    'fdir_thumb_dx',  'fdir_thumb_dy',  'fdir_thumb_dz',
+    'fdir_index_dx',  'fdir_index_dy',  'fdir_index_dz',
+    'fdir_middle_dx', 'fdir_middle_dy', 'fdir_middle_dz',
+    'fdir_ring_dx',   'fdir_ring_dy',   'fdir_ring_dz',
+    'fdir_pinky_dx',  'fdir_pinky_dy',  'fdir_pinky_dz',
+    # --- v3c per-finger direction START (15) ---------------------------
+    'fdirs_thumb_dx',  'fdirs_thumb_dy',  'fdirs_thumb_dz',
+    'fdirs_index_dx',  'fdirs_index_dy',  'fdirs_index_dz',
+    'fdirs_middle_dx', 'fdirs_middle_dy', 'fdirs_middle_dz',
+    'fdirs_ring_dx',   'fdirs_ring_dy',   'fdirs_ring_dz',
+    'fdirs_pinky_dx',  'fdirs_pinky_dy',  'fdirs_pinky_dz',
+    # --- v3c per-finger direction END (15) -----------------------------
+    'fdire_thumb_dx',  'fdire_thumb_dy',  'fdire_thumb_dz',
+    'fdire_index_dx',  'fdire_index_dy',  'fdire_index_dz',
+    'fdire_middle_dx', 'fdire_middle_dy', 'fdire_middle_dz',
+    'fdire_ring_dx',   'fdire_ring_dy',   'fdire_ring_dz',
+    'fdire_pinky_dx',  'fdire_pinky_dy',  'fdire_pinky_dz',
+    # --- v3d rotation signature (9) — palm delta + Lévy + midtip Lévy -
+    'rot_palm_dx',  'rot_palm_dy',  'rot_palm_dz',
+    'rot_palm_levy_xy', 'rot_palm_levy_xz', 'rot_palm_levy_yz',
+    'rot_mtip_levy_xy', 'rot_mtip_levy_xz', 'rot_mtip_levy_yz',
 ]
 assert len(PHONO_FEATURE_NAMES_V2) == PHONO_DIM_V2, \
     f'{len(PHONO_FEATURE_NAMES_V2)} vs {PHONO_DIM_V2}'

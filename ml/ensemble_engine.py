@@ -1,5 +1,5 @@
 """
-3-way ensemble: PhonoEngine (34-dim) + PhonoV2Engine (60-dim) + RawRfEngine (5310-dim).
+3-way ensemble: PhonoEngine (34-dim) + PhonoV2Engine (72-dim, v3) + RawRfEngine (5310-dim).
 
 The three classifiers produce softmax probabilities over the same class set.
 We sum weighted probabilities and pick the argmax.
@@ -38,11 +38,26 @@ class EnsembleEngine:
             print('WARNING: no ensemble member could load.')
             self.loaded = False
             return
-        # Align on whatever class list is available
-        self.classes = list(loaded_members[0].classes)
-        for m in loaded_members[1:]:
+        # Union of all class lists across loaded members. If one member is
+        # missing a class (e.g. rebuild filtered a bad-quality class), we
+        # still accept it — predictions are aligned by class name at
+        # predict-time (see _aligned_probs) so the shape mismatch that
+        # caused historic crashes can no longer happen.
+        seen = []
+        seen_set = set()
+        for m in loaded_members:
+            for c in m.classes:
+                if c not in seen_set:
+                    seen.append(c)
+                    seen_set.add(c)
+        self.classes = seen
+        for m in loaded_members:
             if list(m.classes) != self.classes:
-                print('WARNING: ensemble members have different class lists.')
+                missing = [c for c in self.classes if c not in m.classes]
+                name = type(m).__name__
+                print(f'WARNING: {name} is missing {len(missing)} '
+                      f'class(es): {missing}  (will contribute 0 proba there)')
+        self._class_index = {c: i for i, c in enumerate(self.classes)}
         self.loaded = True
         print(f'EnsembleEngine loaded: {len(self.classes)} classes '
               f'(weights phono={self.phono_weight:.2f} '
@@ -72,26 +87,49 @@ class EnsembleEngine:
         x = ((self.raw._vectorise(query_sequence) - self.raw.mu) / self.raw.sd).reshape(1, -1)
         return self.raw.clf.predict_proba(x)[0]
 
+    def _aligned_probs(self, member, probs_raw):
+        """Project a member's (n_member,) probability vector onto the
+        ensemble's canonical class list. Classes the member does not
+        know get 0. Returns an (n_canonical,) vector plus a mask of
+        which positions the member actually contributes to."""
+        out = np.zeros(len(self.classes), dtype='float32')
+        mask = np.zeros(len(self.classes), dtype=bool)
+        for j, c in enumerate(member.classes):
+            i = self._class_index.get(c)
+            if i is None:
+                continue
+            out[i] = probs_raw[j]
+            mask[i] = True
+        return out, mask
+
     def predict(self, query_sequence):
         if not self.loaded:
             return None, None, []
 
-        probs = np.zeros(len(self.classes), dtype='float32')
-        weight_total = 0.0
+        K = len(self.classes)
+        probs = np.zeros(K, dtype='float32')
+        weight_per_class = np.zeros(K, dtype='float32')
 
         if self.phono.loaded:
-            probs += self.phono_weight * self._phono_probs(query_sequence)
-            weight_total += self.phono_weight
+            p, m = self._aligned_probs(self.phono, self._phono_probs(query_sequence))
+            probs += self.phono_weight * p
+            weight_per_class[m] += self.phono_weight
         if self.phono_v2.loaded:
-            probs += self.phono_v2_weight * self._phono_v2_probs(query_sequence)
-            weight_total += self.phono_v2_weight
+            p, m = self._aligned_probs(self.phono_v2, self._phono_v2_probs(query_sequence))
+            probs += self.phono_v2_weight * p
+            weight_per_class[m] += self.phono_v2_weight
         if self.raw.loaded:
-            probs += self.raw_weight * self._raw_probs(query_sequence)
-            weight_total += self.raw_weight
+            p, m = self._aligned_probs(self.raw, self._raw_probs(query_sequence))
+            probs += self.raw_weight * p
+            weight_per_class[m] += self.raw_weight
 
-        if weight_total <= 0:
+        # Per-class normalisation: a class seen only by a subset of the
+        # members is still comparable because we divide by the weight
+        # that actually voted for it.
+        valid = weight_per_class > 1e-9
+        if not valid.any():
             return None, None, []
-        probs = probs / weight_total
+        probs = np.where(valid, probs / np.maximum(weight_per_class, 1e-9), 0.0)
 
         order = np.argsort(probs)[::-1]
         eps = 1e-9
