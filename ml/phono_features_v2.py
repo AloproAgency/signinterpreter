@@ -505,6 +505,113 @@ def _signed_delta(a, b):
     return (b - a).astype('float32')
 
 
+# ---------------------------------------------------------------------------
+# Anchor-distance features (v3e) — 18 dims
+# ---------------------------------------------------------------------------
+# Track each wrist RELATIVE TO EACH SHOULDER over time.  V8 previously
+# only had global shoulder-midpoint normalisation + averaged distances
+# to fixed head/chest points — it could not distinguish a hand that
+# stays on its own side from one that crosses the body to the opposite
+# shoulder.
+#
+# Layout (18 dims):
+#
+#   Ipsilateral (hand-on-same-side) trajectories — (dx, dy) at 3 timepoints
+#     RH → right-shoulder        start (dx, dy) + mid (dx, dy) + end (dx, dy) = 6
+#     LH → left-shoulder         start (dx, dy) + mid (dx, dy) + end (dx, dy) = 6
+#
+#   Contralateral (crossing-body) — 3-D Euclidean distance at 2 timepoints
+#     RH → left-shoulder         start_d3d + end_d3d                         = 2
+#     LH → right-shoulder        start_d3d + end_d3d                         = 2
+#
+#   Radial approach/departure speed — signed peak rate of change of
+#   ipsilateral distance (positive = hand moving AWAY from its shoulder)
+#     RH ↔ right-shoulder                                                    = 1
+#     LH ↔ left-shoulder                                                     = 1
+#
+# Per-hand: if the hand is absent for the whole sequence, all its dims
+# emit zeros so the classifier receives a stable zero-block rather than
+# random noise.
+
+
+def _shoulder_xyz(seq, side):
+    """Right shoulder = pose idx 6, left shoulder = pose idx 5 in the
+    V8 slim layout (see features.py)."""
+    idx = 6 if side == 'right' else 5
+    return seq[:, idx * 3: idx * 3 + 3]
+
+
+def _sample_3(values, active_idx):
+    """Pick start, mid, end samples from `values` using indices in
+    `active_idx` (avg of 3 frames each side for smoothness)."""
+    if len(active_idx) == 0:
+        return values[0] * 0.0, values[0] * 0.0, values[0] * 0.0
+    k = min(3, len(active_idx))
+    i_s = active_idx[:k]
+    i_m = active_idx[len(active_idx) // 2: len(active_idx) // 2 + max(1, k // 2 + 1)]
+    i_e = active_idx[-k:]
+    return (values[i_s].mean(0),
+            values[i_m].mean(0),
+            values[i_e].mean(0))
+
+
+def _signed_peak_radial_rate(dist_series):
+    """Signed peak |Δd| in the active distance series.  Sign = sign of
+    the net (end − start) drift, so positive = hand moved AWAY from
+    its shoulder on average, negative = toward it."""
+    if len(dist_series) < 2:
+        return 0.0
+    diffs = np.diff(dist_series)
+    peak = float(np.max(np.abs(diffs)))
+    net = float(dist_series[-1] - dist_series[0])
+    sign = 1.0 if net >= 0 else -1.0
+    return sign * peak
+
+
+def _anchor_features(seq, wrist_track, hand_active, ipsi_side):
+    """Produce 9 dims for one hand:
+        ipsi_dx/dy at start, mid, end     (6)
+        contra_d3d at start, end          (2)
+        ipsi radial peak rate (signed)    (1)
+    `ipsi_side` = 'right' or 'left' (the shoulder on the same side as
+    this hand).
+    """
+    if hand_active.sum() < 2:
+        return np.zeros(9, dtype='float32')
+    act_idx = np.where(hand_active)[0]
+    ipsi_sh   = _shoulder_xyz(seq, ipsi_side)
+    contra_sh = _shoulder_xyz(seq, 'left' if ipsi_side == 'right' else 'right')
+
+    # Ipsi: vector wrist - shoulder at start/mid/end, xy only
+    v_ipsi = (wrist_track - ipsi_sh)[:, :2]
+    s_ipsi, m_ipsi, e_ipsi = _sample_3(v_ipsi, act_idx)
+
+    # Contra: 3-D distance
+    d_contra = np.linalg.norm(wrist_track - contra_sh, axis=1)
+    s_contra = float(d_contra[act_idx[:min(3, len(act_idx))]].mean())
+    e_contra = float(d_contra[act_idx[-min(3, len(act_idx)):]].mean())
+
+    # Signed radial peak rate on ipsi distance
+    d_ipsi = np.linalg.norm(wrist_track - ipsi_sh, axis=1)[hand_active]
+    radial_peak = _signed_peak_radial_rate(d_ipsi)
+
+    return np.asarray([
+        s_ipsi[0], s_ipsi[1],
+        m_ipsi[0], m_ipsi[1],
+        e_ipsi[0], e_ipsi[1],
+        s_contra, e_contra,
+        radial_peak,
+    ], dtype='float32')
+
+
+def _anchor_block(seq, rh_active, lh_active, wrist_r, wrist_l):
+    """Full 18-dim anchor-distance block: right-hand (ipsi=R-shoulder)
+    concat left-hand (ipsi=L-shoulder)."""
+    r = _anchor_features(seq, wrist_r, rh_active, 'right')
+    l = _anchor_features(seq, wrist_l, lh_active, 'left')
+    return np.concatenate([r, l]).astype('float32')
+
+
 def _palm_rotation_features(seq, rh_active, rh_palm, rh_landmarks):
     """Compute the 9 palm/hand rotation features for the right hand.
     Returns a flat 9-vector.  Zeros when the hand is absent or too
@@ -548,9 +655,11 @@ PHONO_DIR_DIM      = 12     # v3a: signed wrist displacements + Lévy
 PHONO_FDIR_DIM     = 15     # v3b: per-finger direction at CENTRAL frame
 PHONO_FDIR_SE_DIM  = 30     # v3c: per-finger direction at START + END
 PHONO_ROT_DIM      = 9      # v3d: palm + middle-tip rotation signature
+PHONO_ANCHOR_DIM   = 18     # v3e: per-hand anchor distances (to each shoulder)
 PHONO_DIM_V2 = (PHONO_V1_DIM + PHONO_NEW_DIM
                 + PHONO_DIR_DIM + PHONO_FDIR_DIM
-                + PHONO_FDIR_SE_DIM + PHONO_ROT_DIM)  # 126
+                + PHONO_FDIR_SE_DIM + PHONO_ROT_DIM
+                + PHONO_ANCHOR_DIM)  # 144
 
 
 def phonological_descriptor_v2(seq):
@@ -842,6 +951,9 @@ def phonological_descriptor_v2(seq):
     rotation_v3d = _palm_rotation_features(seq, rh_active, rh_palm,
                                            rh_landmarks)
 
+    # --- Anchor distances per hand per shoulder (18 dims, v3e) ---------
+    anchor_v3e = _anchor_block(seq, rh_active, lh_active, wrist_r, wrist_l)
+
     descriptor = np.concatenate([
         handshape_feats,   # 6
         location_feats,    # 5
@@ -859,6 +971,7 @@ def phonological_descriptor_v2(seq):
         finger_dir_start,  # 15   -> finger direction start (v3c) = 15
         finger_dir_end,    # 15   -> finger direction end   (v3c) = 15
         rotation_v3d,      # 9    -> palm + midtip rotation (v3d) = 9
+        anchor_v3e,        # 18   -> per-hand anchor distances (v3e) = 18
     ])
     assert descriptor.shape == (PHONO_DIM_V2,), descriptor.shape
     return descriptor.astype('float32')
@@ -913,6 +1026,21 @@ PHONO_FEATURE_NAMES_V2 = [
     'rot_palm_dx',  'rot_palm_dy',  'rot_palm_dz',
     'rot_palm_levy_xy', 'rot_palm_levy_xz', 'rot_palm_levy_yz',
     'rot_mtip_levy_xy', 'rot_mtip_levy_xz', 'rot_mtip_levy_yz',
+    # --- v3e anchor distances per hand per shoulder (18) --------------
+    # Right hand: ipsilateral (vs right-shoulder) xy at 3 timepoints,
+    # contralateral (vs left-shoulder) 3-D distance at start/end,
+    # signed peak radial rate ipsi.
+    'anc_rh_R_dx_s', 'anc_rh_R_dy_s',
+    'anc_rh_R_dx_m', 'anc_rh_R_dy_m',
+    'anc_rh_R_dx_e', 'anc_rh_R_dy_e',
+    'anc_rh_L_d3d_s', 'anc_rh_L_d3d_e',
+    'anc_rh_R_radial_peak',
+    # Left hand: ipsilateral = left-shoulder, contralateral = right.
+    'anc_lh_L_dx_s', 'anc_lh_L_dy_s',
+    'anc_lh_L_dx_m', 'anc_lh_L_dy_m',
+    'anc_lh_L_dx_e', 'anc_lh_L_dy_e',
+    'anc_lh_R_d3d_s', 'anc_lh_R_d3d_e',
+    'anc_lh_L_radial_peak',
 ]
 assert len(PHONO_FEATURE_NAMES_V2) == PHONO_DIM_V2, \
     f'{len(PHONO_FEATURE_NAMES_V2)} vs {PHONO_DIM_V2}'
