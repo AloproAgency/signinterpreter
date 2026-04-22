@@ -4,7 +4,7 @@ import json
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ml.mediapipe_service import MediaPipeService
-from ml.template_manager import save_contribution, list_templates
+from ml.template_manager import save_contribution, list_templates, normalize_word
 from server.database import SessionLocal, Word, Contribution
 from ml.constants import SEQUENCE_LENGTH
 
@@ -53,7 +53,7 @@ async def collection_websocket(ws: WebSocket):
                 action = msg.get('action')
 
                 if action == 'start':
-                    current_word = msg.get('word', '').strip()
+                    current_word = normalize_word(msg.get('word', ''))
                     contributor = msg.get('contributor', 'anonymous').strip()
                     if not current_word:
                         await ws.send_json({'type': 'error', 'message': 'Word is required'})

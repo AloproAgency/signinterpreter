@@ -9,6 +9,7 @@ from typing import Optional, List
 from server.database import get_db, Word, Contribution, IndexBuild
 from sqlalchemy.orm import Session
 from ml import template_manager
+from ml.template_manager import normalize_word
 from server.routers.inference_ws import get_engine
 from server.config import ADMIN_PASSWORD, TEMPLATE_DIR, REFERENCE_DATASET
 
@@ -67,6 +68,7 @@ def list_vocabulary(db: Session = Depends(get_db)):
 
 @router.get('/vocabulary/{word_name}')
 def get_word_detail(word_name: str, db: Session = Depends(get_db)):
+    word_name = normalize_word(word_name)
     word = db.query(Word).filter(Word.name == word_name).first()
     if not word:
         raise HTTPException(404, 'Word not found')
@@ -103,20 +105,22 @@ def get_word_detail(word_name: str, db: Session = Depends(get_db)):
 
 @router.post('/vocabulary')
 def create_word(data: WordCreate, db: Session = Depends(get_db)):
-    existing = db.query(Word).filter(Word.name == data.name).first()
+    name = normalize_word(data.name)
+    if not name:
+        raise HTTPException(400, 'Word name is empty')
+    existing = db.query(Word).filter(Word.name == name).first()
     if existing:
         raise HTTPException(400, 'Word already exists')
-    word = Word(name=data.name, description=data.description)
+    word = Word(name=name, description=data.description)
     db.add(word)
     db.commit()
-    # Create templates directory
-    os.makedirs(os.path.join(TEMPLATE_DIR, data.name), exist_ok=True)
+    os.makedirs(os.path.join(TEMPLATE_DIR, name), exist_ok=True)
     return {'id': word.id, 'name': word.name}
 
 
 @router.patch('/vocabulary/{word_name}')
 def update_word(word_name: str, data: WordUpdate, db: Session = Depends(get_db)):
-    word = db.query(Word).filter(Word.name == word_name).first()
+    word = db.query(Word).filter(Word.name == normalize_word(word_name)).first()
     if not word:
         raise HTTPException(404, 'Word not found')
     if data.description is not None:
@@ -129,6 +133,7 @@ def update_word(word_name: str, data: WordUpdate, db: Session = Depends(get_db))
 
 @router.delete('/vocabulary/{word_name}')
 def delete_word(word_name: str, db: Session = Depends(get_db)):
+    word_name = normalize_word(word_name)
     word = db.query(Word).filter(Word.name == word_name).first()
     if not word:
         raise HTTPException(404, 'Word not found')
@@ -172,10 +177,17 @@ def review_contribution(
         raise HTTPException(404, 'Contribution not found')
 
     if review.status == 'approved':
-        # Move template from pending to templates/
+        # Move template from pending to templates/.  We use the
+        # contribution's DB id as the destination filename so that
+        # concurrent approvals can never overwrite each other (the
+        # previous sequential-index scheme had a race condition that
+        # silently lost templates — see template_manager.save_template
+        # docstring).
         word = db.query(Word).get(contrib.word_id)
         if word and os.path.exists(contrib.file_path):
-            new_path, idx = template_manager.approve_contribution(contrib.file_path, word.name)
+            new_path, idx = template_manager.approve_contribution(
+                contrib.file_path, word.name, unique_id=contrib.id,
+            )
             contrib.file_path = new_path
             word.template_count = len(template_manager.list_templates(word.name))
 
