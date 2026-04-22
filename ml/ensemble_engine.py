@@ -7,6 +7,7 @@ We sum weighted probabilities and pick the argmax.
 Default weights from Round 2 sweep (92.0% WLASL cross-signer):
   phono_v1 = 0.20, phono_v2 = 0.40, raw = 0.40
 """
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from ml.phono_engine import PhonoEngine
@@ -37,6 +38,13 @@ class EnsembleEngine:
         self.reranker: DtwReranker | None = (
             DtwReranker(alpha=rerank_alpha) if use_rerank else None
         )
+        # Long-lived thread pool: the 3 ensemble members (phono /
+        # phono_v2 / raw_rf) are independent pure functions, so we run
+        # them concurrently per `predict()`.  scikit-learn's RF
+        # `predict_proba` releases the GIL during its joblib backend
+        # work, so threads give real wall-clock speedup.
+        self._exec = ThreadPoolExecutor(max_workers=3,
+                                        thread_name_prefix='ens')
 
     def load(self):
         self.phono.load()
@@ -128,18 +136,24 @@ class EnsembleEngine:
         probs = np.zeros(K, dtype='float32')
         weight_per_class = np.zeros(K, dtype='float32')
 
+        # Dispatch the ensemble members concurrently — sklearn's
+        # predict_proba releases the GIL during the heavy work, so
+        # ThreadPoolExecutor gives real wall-clock speedup.
+        jobs = []
         if self.phono.loaded:
-            p, m = self._aligned_probs(self.phono, self._phono_probs(query_sequence))
-            probs += self.phono_weight * p
-            weight_per_class[m] += self.phono_weight
+            jobs.append((self.phono_weight, self.phono,
+                         self._exec.submit(self._phono_probs, query_sequence)))
         if self.phono_v2.loaded:
-            p, m = self._aligned_probs(self.phono_v2, self._phono_v2_probs(query_sequence))
-            probs += self.phono_v2_weight * p
-            weight_per_class[m] += self.phono_v2_weight
+            jobs.append((self.phono_v2_weight, self.phono_v2,
+                         self._exec.submit(self._phono_v2_probs, query_sequence)))
         if self.raw.loaded:
-            p, m = self._aligned_probs(self.raw, self._raw_probs(query_sequence))
-            probs += self.raw_weight * p
-            weight_per_class[m] += self.raw_weight
+            jobs.append((self.raw_weight, self.raw,
+                         self._exec.submit(self._raw_probs, query_sequence)))
+
+        for weight, member, fut in jobs:
+            p, m = self._aligned_probs(member, fut.result())
+            probs += weight * p
+            weight_per_class[m] += weight
 
         # Per-class normalisation: a class seen only by a subset of the
         # members is still comparable because we divide by the weight

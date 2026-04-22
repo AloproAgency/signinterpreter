@@ -76,11 +76,22 @@ class HypothesisTracker:
     """
 
     def __init__(self, promote_threshold: float = 3.0, decay: float = 0.6,
-                 prune_below: float = 0.3, min_dominance: int = 5):
+                 prune_below: float = 0.3, min_dominance: int = 5,
+                 fast_commit_prob: float = 0.70,
+                 fast_commit_min_streak: int = 2):
         self.promote_threshold = float(promote_threshold)
         self.decay = float(decay)
         self.prune_below = float(prune_below)
         self.min_dominance = int(min_dominance)
+        # Confidence-aware fast-commit (latency reducer): when soft-vote
+        # mode is used (top_k passed to observe()) AND the most recent
+        # frame's top-1 probability exceeds `fast_commit_prob` AND the
+        # winner has been stable for at least `fast_commit_min_streak`
+        # frames, commit it immediately rather than waiting for the
+        # full min_dominance window.  Keeps the safety net for low-
+        # confidence cases (which still wait min_dominance frames).
+        self.fast_commit_prob = float(fast_commit_prob)
+        self.fast_commit_min_streak = int(fast_commit_min_streak)
         self.support: dict[str, float] = {}
         self.current_hypothesis: str | None = None
         self.last_committed: str | None = None
@@ -88,6 +99,9 @@ class HypothesisTracker:
         # the winner. A short streak means the hypothesis is likely a
         # transition artefact and must NOT be committed.
         self.hypothesis_streak: int = 0
+        # Most recent top-1 probability, populated only in soft-vote mode.
+        # Used by the fast-commit path; resets on reset().
+        self._last_top1_prob: float = 0.0
 
     # ------------------------------------------------------------------
     def observe(self, predicted_word: str | None,
@@ -122,6 +136,9 @@ class HypothesisTracker:
             if total <= 1e-9:
                 return None
             probs = {w: p / total for w, p in probs.items()}
+            # Memorise the top-1 probability of THIS frame for fast-commit.
+            top1_word = max(probs, key=probs.get)
+            self._last_top1_prob = probs[top1_word]
             # Reinforce each observed candidate by its share, decay others
             observed_set = set(probs.keys())
             for w, p in probs.items():
@@ -150,6 +167,20 @@ class HypothesisTracker:
         # The hypothesis is already this word → reinforce its dominance streak.
         if winner == self.current_hypothesis:
             self.hypothesis_streak += 1
+            # Confidence-aware fast-commit: when we are running in
+            # soft-vote mode and the *current* frame says the winner
+            # has prob >= fast_commit_prob AND the winner has been
+            # stable for at least fast_commit_min_streak frames AND
+            # we haven't already committed it, commit immediately.
+            # Subsequent high-confidence frames of the SAME winner
+            # are silently deduped via the last_committed check, so
+            # we cannot double-commit.
+            if (top_k
+                    and self.hypothesis_streak >= self.fast_commit_min_streak
+                    and self._last_top1_prob >= self.fast_commit_prob
+                    and winner != self.last_committed):
+                self.last_committed = winner
+                return winner
             return None
 
         # Transition detected. Commit the previous hypothesis ONLY if it
@@ -189,3 +220,4 @@ class HypothesisTracker:
         self.current_hypothesis = None
         self.last_committed = None
         self.hypothesis_streak = 0
+        self._last_top1_prob = 0.0
