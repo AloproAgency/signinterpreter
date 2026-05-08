@@ -22,6 +22,9 @@ export default function AdminPage() {
   const [words, setWords] = useState<WordInfo[]>([]);
   const [building, setBuilding] = useState(false);
   const [buildProgress, setBuildProgress] = useState(0);
+  const [trainLogs, setTrainLogs] = useState<{epoch:number;total:number;acc:number;val_acc:number;loss:number;val_loss:number}[]>([]);
+  const [trainDone, setTrainDone] = useState<null | {meta: any}>(null);
+  const trainLogRef = useRef<HTMLDivElement>(null);
   const [newWordName, setNewWordName] = useState('');
   const [tab, setTab] = useState<'dashboard' | 'contributions' | 'index' | 'words' | 'team'>('dashboard');
   const [contribFilter, setContribFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('pending');
@@ -74,23 +77,41 @@ export default function AdminPage() {
 
   useEffect(() => { if (logged) refresh(); }, [logged, refresh]);
 
-  const handleBuildIndex = async () => {
+  const handleTrain = () => {
+    if (building) return;
     setBuilding(true);
     setBuildProgress(0);
-    const interval = setInterval(() => {
-      setBuildProgress(p => Math.min(p + Math.random() * 15, 90));
-    }, 300);
-    try {
-      const result = await api.buildIndex();
-      clearInterval(interval);
-      setBuildProgress(100);
-      addToast('success', `Index construit: ${result.n_templates} templates, ${result.n_words} mots`);
-      refresh();
-    } catch {
-      clearInterval(interval);
-      addToast('error', 'Erreur lors de la construction');
-    }
-    setTimeout(() => { setBuilding(false); setBuildProgress(0); }, 1000);
+    setTrainLogs([]);
+    setTrainDone(null);
+
+    const es = api.trainStream(undefined, 200);
+    es.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'epoch') {
+        setTrainLogs(prev => {
+          const next = [...prev, msg];
+          setTimeout(() => trainLogRef.current?.scrollTo({ top: 99999, behavior: 'smooth' }), 30);
+          return next;
+        });
+        setBuildProgress(Math.round((msg.epoch / msg.total) * 100));
+      } else if (msg.type === 'done') {
+        setBuildProgress(100);
+        setTrainDone({ meta: msg.meta });
+        setBuilding(false);
+        addToast('success', `Entraînement terminé — ${msg.meta.n_classes} classes, val_acc ${(msg.meta.best_val_accuracy * 100).toFixed(1)}%`);
+        refresh();
+        es.close();
+      } else if (msg.type === 'error') {
+        addToast('error', `Erreur : ${msg.message}`);
+        setBuilding(false);
+        es.close();
+      }
+    };
+    es.onerror = () => {
+      addToast('error', 'Connexion SSE perdue');
+      setBuilding(false);
+      es.close();
+    };
   };
 
   const handleReview = async (id: number, status: 'approved' | 'rejected') => {
@@ -243,7 +264,7 @@ export default function AdminPage() {
     { key: 'dashboard' as const, label: 'Dashboard', icon: BarChart3 },
     { key: 'team' as const, label: 'Equipe', icon: Users },
     { key: 'contributions' as const, label: 'Contributions', icon: Eye },
-    { key: 'index' as const, label: 'Index', icon: Database },
+    { key: 'index' as const, label: 'Modèle', icon: Cpu },
     { key: 'words' as const, label: 'Mots', icon: BookIcon },
   ];
 
@@ -604,27 +625,41 @@ export default function AdminPage() {
         </>
       )}
 
-      {/* Index Tab */}
+      {/* Modèle Tab */}
       {tab === 'index' && (
-        <div className="max-w-md animate-fade-in">
+        <div className="max-w-2xl animate-fade-in space-y-4">
+          {/* Description card */}
           <div className="rounded-lg p-5 border border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
             <h3 className="text-sm font-semibold mb-1 uppercase tracking-wider flex items-center gap-2 text-[#656d76] dark:text-[#8b949e]">
-              <Database className="w-3.5 h-3.5 text-[#1396ba]" />
-              Index FAISS
+              <Cpu className="w-3.5 h-3.5 text-[#1396ba]" />
+              Entraîner le classificateur BiLSTM
             </h3>
-            <p className="text-sm mb-5 text-[#8b949e] dark:text-[#484f58]">
-              Reconstruisez l'index apres avoir approuve de nouvelles contributions.
+            <p className="text-sm mb-1 text-[#8b949e] dark:text-[#484f58]">
+              Entraîne le réseau de neurones BiLSTM + attention temporelle sur tous les templates disponibles.
+              Le modèle apprend à reconnaître chaque signe à partir de séquences de 30 frames × 171 points de pose.
+              Une fois terminé, il est rechargé en mémoire automatiquement.
             </p>
+            {stats && (
+              <p className="text-xs font-mono text-[#1396ba] mt-2">
+                {stats.templates} templates · {stats.words} classes · dernier entraînement{' '}
+                {stats.last_build.built_at
+                  ? new Date(stats.last_build.built_at).toLocaleString('fr-FR')
+                  : 'jamais'}
+              </p>
+            )}
 
-            {building && (
-              <div className="mb-5">
-                <div className="flex justify-between text-sm mb-1.5">
-                  <span className="font-medium text-[#656d76] dark:text-[#8b949e]">Construction...</span>
-                  <span className="font-mono font-bold text-[#1396ba]">{Math.round(buildProgress)}%</span>
+            {/* Progress bar */}
+            {(building || buildProgress === 100) && (
+              <div className="mt-4">
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-[#656d76] dark:text-[#8b949e]">
+                    {building ? `Epoch ${trainLogs.length}…` : 'Terminé'}
+                  </span>
+                  <span className="font-mono font-bold text-[#1396ba]">{buildProgress}%</span>
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden bg-[#d0d7de] dark:bg-[#30363d]">
                   <div
-                    className="h-full rounded-full bg-[#1396ba] transition-all duration-300"
+                    className="h-full rounded-full bg-[#1396ba] transition-all duration-500"
                     style={{ width: `${buildProgress}%` }}
                   />
                 </div>
@@ -632,32 +667,73 @@ export default function AdminPage() {
             )}
 
             <button
-              onClick={handleBuildIndex}
+              onClick={handleTrain}
               disabled={building}
-              className={`w-full py-2.5 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer ${
+              className={`mt-4 w-full py-2.5 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer ${
                 building
                   ? 'bg-[#f6f8fa] dark:bg-[#0d1117] text-[#8b949e] border border-[#d0d7de] dark:border-[#30363d]'
                   : 'bg-[#1396ba] hover:bg-[#17b8e3] text-white'
               }`}
             >
               <RefreshCw className={`w-4 h-4 ${building ? 'animate-spin-slow' : ''}`} />
-              {building ? 'Construction...' : 'Reconstruire l\'index'}
+              {building ? 'Entraînement en cours…' : 'Lancer l\'entraînement'}
             </button>
-
-            {stats && stats.last_build.built_at && (
-              <div className="mt-4 rounded-md p-3 border border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
-                <p className="text-sm uppercase tracking-wider mb-1 font-medium text-[#656d76] dark:text-[#8b949e]">
-                  Dernier build
-                </p>
-                <p className="text-sm font-bold text-[#1f2328] dark:text-[#e6edf3]">
-                  {new Date(stats.last_build.built_at).toLocaleString('fr-FR')}
-                </p>
-                <p className="text-sm mt-0.5 font-mono text-[#8b949e] dark:text-[#484f58]">
-                  {stats.last_build.n_templates} templates | {stats.last_build.duration_ms}ms | {stats.last_build.status}
-                </p>
-              </div>
-            )}
           </div>
+
+          {/* Live log terminal */}
+          {(trainLogs.length > 0 || trainDone) && (
+            <div className="rounded-lg border border-[#d0d7de] dark:border-[#30363d] overflow-hidden">
+              <div className="px-3 py-2 bg-[#f6f8fa] dark:bg-[#161b22] border-b border-[#d0d7de] dark:border-[#30363d] flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5 text-[#1396ba]" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-[#656d76] dark:text-[#8b949e]">
+                  Logs d'entraînement
+                </span>
+              </div>
+              <div
+                ref={trainLogRef}
+                className="h-64 overflow-y-auto p-3 font-mono text-xs bg-[#0d1117] text-[#e6edf3] space-y-0.5"
+              >
+                {trainLogs.map((log, i) => (
+                  <div key={i} className="flex gap-3 leading-5">
+                    <span className="text-[#8b949e] w-16 shrink-0">
+                      {String(log.epoch).padStart(3, ' ')}/{log.total}
+                    </span>
+                    <span className="text-[#56d364]">
+                      acc {(log.acc * 100).toFixed(1)}%
+                    </span>
+                    <span className="text-[#1396ba]">
+                      val {(log.val_acc * 100).toFixed(1)}%
+                    </span>
+                    <span className="text-[#8b949e]">
+                      loss {log.loss.toFixed(4)}
+                    </span>
+                  </div>
+                ))}
+                {trainDone && (
+                  <div className="pt-2 border-t border-[#30363d] mt-2 text-[#56d364] font-semibold">
+                    ✓ Entraînement terminé — {trainDone.meta.n_classes} classes,{' '}
+                    val_acc {(trainDone.meta.best_val_accuracy * 100).toFixed(1)}%,{' '}
+                    orig_acc {(trainDone.meta.orig_accuracy * 100).toFixed(1)}%
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Last build info */}
+          {stats?.last_build.built_at && !building && trainLogs.length === 0 && (
+            <div className="rounded-md p-3 border border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
+              <p className="text-xs uppercase tracking-wider mb-1 font-medium text-[#656d76] dark:text-[#8b949e]">
+                Dernier entraînement
+              </p>
+              <p className="text-sm font-bold text-[#1f2328] dark:text-[#e6edf3]">
+                {new Date(stats.last_build.built_at).toLocaleString('fr-FR')}
+              </p>
+              <p className="text-xs mt-0.5 font-mono text-[#8b949e] dark:text-[#484f58]">
+                {stats.last_build.n_templates} templates · {(stats.last_build.duration_ms / 1000).toFixed(0)}s · {stats.last_build.status}
+              </p>
+            </div>
+          )}
         </div>
       )}
 

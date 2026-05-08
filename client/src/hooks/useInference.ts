@@ -38,7 +38,12 @@ export function useInference(
     };
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data.type === 'status') setStatus(data);
+      if (data.type === 'status') {
+        setStatus(data);
+        // When the hand disappears, the last prediction is stale — clear it
+        // so the "En cours" strip doesn't keep showing an old sign.
+        if (!data.hand_visible) setPrediction(null);
+      }
       else if (data.type === 'prediction') setPrediction(data);
       else if (data.type === 'sentence_update') {
         setSentence(prev => {

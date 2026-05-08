@@ -93,18 +93,24 @@ export function useMediaPipe() {
       const features = extractFeatures(result);
 
       // MediaPipe Holistic keeps predicting hand landmarks for several seconds
-      // after the real hands leave the frame (tracking persistence). Use the
-      // wrist visibility in pose landmarks — it drops immediately when the
-      // wrists go out of frame.
+      // after the real hands leave the frame (tracking persistence), AND the
+      // pose tracker extrapolates wrist positions from the shoulder/elbow
+      // chain even when the hands are not in frame — so neither signal alone
+      // is trustworthy. Require BOTH:
+      //   (a) at least one wrist visible with confidence > 0.5 in the pose
+      //   (b) actual hand landmarks returned by the hand tracker
+      // When MediaPipe invents a wrist position but the hand tracker returns
+      // nothing, (b) is false → handVisible=false, and the spurious signal
+      // is ignored (the main cause of "detects a hand when none is shown").
       const poseRaw = mpResult.poseLandmarks?.[0] as any[] | undefined;
-      let handVisible = false;
+      let wristVisible = false;
       if (poseRaw && poseRaw.length >= 17) {
         const lwVis = poseRaw[15]?.visibility ?? 0;
         const rwVis = poseRaw[16]?.visibility ?? 0;
-        handVisible = Math.max(lwVis, rwVis) > 0.5;
-      } else {
-        handVisible = hasHandVisible(result);
+        wristVisible = Math.max(lwVis, rwVis) > 0.5;
       }
+      const handsDetected = hasHandVisible(result);
+      let handVisible = wristVisible && handsDetected;
 
       // Staleness check: build a flat vector of (wrists + every hand landmark)
       // and compute its L1 delta vs the previous frame. When ALL of these are

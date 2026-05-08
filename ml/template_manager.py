@@ -39,9 +39,8 @@ def list_templates(word):
     word_dir = os.path.join(TEMPLATE_DIR, word)
     if not os.path.isdir(word_dir):
         return []
-    files = sorted([f for f in os.listdir(word_dir) if f.endswith('.npy')],
-                   key=lambda x: int(x.replace('.npy', '')))
-    return [{'index': int(f.replace('.npy', '')), 'file': f} for f in files]
+    files = sorted(f for f in os.listdir(word_dir) if f.endswith('.npy'))
+    return [{'index': i, 'file': f} for i, f in enumerate(files)]
 
 
 def get_next_index(word):
@@ -49,9 +48,8 @@ def get_next_index(word):
     word = normalize_word(word)
     word_dir = os.path.join(TEMPLATE_DIR, word)
     os.makedirs(word_dir, exist_ok=True)
-    existing = [int(f.replace('.npy', ''))
-                for f in os.listdir(word_dir) if f.endswith('.npy')]
-    return max(existing) + 1 if existing else 0
+    existing = [f for f in os.listdir(word_dir) if f.endswith('.npy')]
+    return len(existing)
 
 
 def save_template(word, template_array, unique_id=None):

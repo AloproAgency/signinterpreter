@@ -1,8 +1,10 @@
 {
-  "sign_vocab_size": 2994,
-  "sent_vocab_size": 5662,
-  "max_sign_len": 9,
+  "hidden_dim": 512,
+  "embed_dim": 128,
+  "sign_vocab": 38,
+  "sent_vocab": 193,
+  "max_sign_len": 8,
   "max_sent_len": 13,
-  "embedding_dim": 128,
-  "hidden_dim": 256
+  "final_acc": 0.18679678440093994,
+  "final_val_acc": 0.16629956662654877
 }

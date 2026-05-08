@@ -9,8 +9,8 @@ CONTRIBUTIONS_DIR = os.path.join(DATA_DIR, 'contributions')
 # Sequence
 SEQUENCE_LENGTH = 30
 
-# Classification acceptance threshold: -log(prob). prob >= exp(-0.8) ≈ 0.45
-THRESHOLD = 0.8
+# Classification acceptance threshold: -log(prob). prob >= exp(-0.55) ≈ 0.58
+THRESHOLD = 0.55
 
 # Smoothing
 SMOOTH_ALPHA = 0.7
@@ -19,7 +19,7 @@ SMOOTH_ALPHA = 0.7
 MOTION_START_THRESHOLD = 0.025   # hand-dims mean delta; 2 consecutive frames required
 MOTION_END_THRESHOLD = 0.018     # preserves sign tail for classifier
 MOTION_END_FRAMES = 6            # ~200 ms at 30 FPS
-MIN_SIGN_FRAMES = 4              # ~130 ms — below this the 30-frame resample is junk
+MIN_SIGN_FRAMES = 6              # ~200 ms — rejects fidgets too short to be real signs
 MAX_SIGN_FRAMES = 120            # ~4 s at 30 FPS
 
 # Intermediate-prediction cadence (UI feedback only)

@@ -1,0 +1,8 @@
+{
+  "n_classes": 30,
+  "n_templates": 2100,
+  "n_aug_samples": 21000,
+  "best_val_accuracy": 1.0,
+  "orig_accuracy": 1.0,
+  "templates_dir": "/Users/alopro/Desktop/AI/RECHERCHE/SignInterpreter/V11/data/templates"
+}

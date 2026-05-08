@@ -1,9 +1,12 @@
 """REST API endpoints for vocabulary, contributions, admin."""
 import os
 import time
+import json
+import queue
+import threading
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from server.database import get_db, Word, Contribution, IndexBuild
@@ -226,29 +229,30 @@ def admin_login(data: AdminLogin):
     return {'ok': True, 'token': 'admin-session'}
 
 
+class BuildIndexRequest(BaseModel):
+    templates_dir: Optional[str] = None  # custom path; None = auto-detect V11 then V8
+    epochs: int = 200
+
+
 @router.post('/admin/build-index')
-def build_index(db: Session = Depends(get_db)):
+def build_index(req: BuildIndexRequest = BuildIndexRequest(), db: Session = Depends(get_db)):
     import time
     t0 = time.time()
     result = {'status': 'success'}
 
-    # Retrain the 3 Random Forests of the production ensemble.
-    from ml import phono_trainer, phono_v2_trainer, raw_rf_trainer
+    # Train the V11 BiLSTM classifier on the available templates.
+    from ml import lstm_trainer
     try:
-        result['phono'] = phono_trainer.fit_and_save()
+        result['lstm'] = lstm_trainer.fit_and_save(
+            templates_dir=req.templates_dir,
+            epochs=req.epochs,
+        )
     except Exception as e:
-        result['phono_error'] = str(e); result['status'] = 'failed'
-    try:
-        result['phono_v2'] = phono_v2_trainer.fit_and_save()
-    except Exception as e:
-        result['phono_v2_error'] = str(e); result['status'] = 'failed'
-    try:
-        result['raw_rf'] = raw_rf_trainer.fit_and_save()
-    except Exception as e:
-        result['raw_rf_error'] = str(e); result['status'] = 'failed'
+        result['lstm_error'] = str(e)
+        result['status'] = 'failed'
 
-    n_templates = (result.get('phono') or {}).get('n_templates', 0)
-    n_classes = (result.get('phono') or {}).get('n_classes', 0)
+    n_templates = (result.get('lstm') or {}).get('n_templates', 0)
+    n_classes   = (result.get('lstm') or {}).get('n_classes', 0)
     build = IndexBuild(
         n_words=n_classes,
         n_templates=n_templates,
@@ -259,11 +263,50 @@ def build_index(db: Session = Depends(get_db)):
     db.add(build)
     db.commit()
 
-    # Reload the live inference engine (picks up the new RFs + classes).
+    # Hot-reload the live LSTM engine (picks up the newly saved model.keras).
     eng = get_engine()
     eng.reload()
 
     return result
+
+
+@router.get('/admin/train-stream')
+def train_stream(templates_dir: Optional[str] = None, epochs: int = 200):
+    """SSE endpoint — streams BiLSTM training progress epoch by epoch."""
+    q: queue.Queue = queue.Queue()
+
+    def run():
+        try:
+            from ml import lstm_trainer
+            meta = lstm_trainer.fit_and_save(
+                templates_dir=templates_dir or None,
+                epochs=epochs,
+                progress_queue=q,
+            )
+            # Hot-reload engine after training
+            eng = get_engine()
+            eng.reload()
+            q.put({'type': 'done', 'meta': meta})
+        except Exception as e:
+            q.put({'type': 'error', 'message': str(e)})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def event_stream():
+        while True:
+            try:
+                item = q.get(timeout=2)
+                yield f"data: {json.dumps(item)}\n\n"
+                if item.get('type') in ('done', 'error'):
+                    break
+            except queue.Empty:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @router.get('/admin/stats')

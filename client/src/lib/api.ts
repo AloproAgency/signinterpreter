@@ -80,4 +80,11 @@ export const api = {
     request('/admin/login', { method: 'POST', body: JSON.stringify({ password }) }),
   buildIndex: () => request('/admin/build-index', { method: 'POST' }),
   getStats: () => request('/admin/stats'),
+
+  // Training stream (SSE)
+  trainStream: (templatesDir?: string, epochs = 200): EventSource => {
+    const params = new URLSearchParams({ epochs: String(epochs) });
+    if (templatesDir) params.set('templates_dir', templatesDir);
+    return new EventSource(`${BASE}/admin/train-stream?${params}`);
+  },
 };
