@@ -7,24 +7,6 @@ dist/
 build/
 *.egg
 
-# Data (user-specific, not committed)
-data/templates/
-data/contributions/
-data/faiss.index
-data/metadata.json
-data/sentence_model/*.keras
-data/training_pairs.csv
-data/phono/
-data/phono_v2/
-data/rf_raw/
-
-# Scratch / experiments (regenerated via scripts, never committed)
-experiments/
-.backup_local_*/
-
-# Database
-server/signinterpreter.db
-
 # Node
 client/node_modules/
 client/dist/
