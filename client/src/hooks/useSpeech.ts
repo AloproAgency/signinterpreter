@@ -12,7 +12,7 @@ export function useSpeech() {
     const v = localStorage.getItem(STORAGE_KEY);
     return v === null ? true : v === '1';
   });
-  const [available, setAvailable] = useState<boolean>(
+  const [available] = useState<boolean>(
     typeof window !== 'undefined' && 'speechSynthesis' in window,
   );
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);

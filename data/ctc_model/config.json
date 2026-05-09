@@ -1,0 +1,8 @@
+{
+  "input_dim": 171,
+  "n_classes": 30,
+  "hidden": 256,
+  "n_layers": 2,
+  "dropout": 0.3,
+  "best_sign_acc": 0.9992405832320778
+}

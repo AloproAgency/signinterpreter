@@ -25,6 +25,7 @@ export function useInference(
   const [phraseSigns, setPhraseSigns] = useState<string[][]>([]);
   const [phraseScores, setPhraseScores] = useState<number[]>([]);
   const [lastAddedIndex, setLastAddedIndex] = useState(-1);
+  const [ctcActive, setCtcActive] = useState(false);
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -38,7 +39,10 @@ export function useInference(
     };
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data.type === 'status') {
+      if (data.type === 'model_info') {
+        setCtcActive(data.ctc);
+      }
+      else if (data.type === 'status') {
         setStatus(data);
         // When the hand disappears, the last prediction is stale — clear it
         // so the "En cours" strip doesn't keep showing an old sign.
@@ -118,5 +122,6 @@ export function useInference(
     connected, status, prediction, sentence, translated, translatedScore,
     phrases, phraseSigns, phraseScores, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold, finalizeSentence,
+    ctcActive,
   };
 }

@@ -19,6 +19,7 @@ export default function InferencePage() {
     connected, status, prediction, sentence, translated, translatedScore,
     phrases, phraseSigns, phraseScores, lastAddedIndex,
     connect, disconnect, clearSentence, setThreshold, finalizeSentence,
+    ctcActive,
   } = useInference(processFrame, videoRef, active, mediaPipeReady);
 
   // Only display the French translation when we're confident enough.
@@ -132,6 +133,15 @@ export default function InferencePage() {
                   {connected ? 'Connecté' : 'Reconnexion…'}
                 </span>
                 {mediaPipeReady && <span className="text-[#1396ba]">· MediaPipe prêt</span>}
+                {connected && (
+                  <span className={`px-1.5 py-0.5 rounded text-xs font-bold tracking-wide ${
+                    ctcActive
+                      ? 'bg-[#1396ba]/15 text-[#1396ba]'
+                      : 'bg-[#8b949e]/15 text-[#8b949e]'
+                  }`}>
+                    {ctcActive ? 'CTC' : 'SW'}
+                  </span>
+                )}
                 {prediction && <span className="font-mono">· {prediction.inference_ms}ms</span>}
               </div>
             </div>
