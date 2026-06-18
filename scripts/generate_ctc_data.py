@@ -16,11 +16,12 @@ CSV_PATH     = os.path.join(ROOT, 'data', 'training_pairs.csv')
 OUT_PKL      = os.path.join(ROOT, 'data', 'ctc_sequences.pkl')
 OUT_CLASSES  = os.path.join(ROOT, 'data', 'ctc_classes.json')
 
-N          = 30_000
-SPEED_MIN  = 0.75   # templates stretched to 75–125 % of original length
-SPEED_MAX  = 1.25
-TRANS_N    = 3      # linear-interpolated frames at sign boundaries
-NOISE_STD  = 0.005
+N              = 40_000
+N_SINGLE       = 200    # séquences mono-signe par classe (corrige biais position-0)
+SPEED_MIN      = 0.50   # templates stretched to 50–160 % of original length
+SPEED_MAX      = 1.60
+TRANS_N        = 3      # linear-interpolated frames at sign boundaries
+NOISE_STD      = 0.008
 
 
 def parse_signs(raw: str, known: set) -> list[str] | None:
@@ -129,6 +130,15 @@ def main():
     class_idx  = {c: i for i, c in enumerate(classes)}
     counters   = {c: 0 for c in classes}   # round-robin index per class
 
+    # ── Séquences mono-signe : corrige le biais position-0 ───────────────────
+    print(f"Génération de {N_SINGLE} séquences mono-signe par classe ({N_SINGLE * len(classes)} total)...")
+    for sign in classes:
+        for _ in range(N_SINGLE):
+            seq, signs = build_sequence([sign], templates, counters)
+            seqs_out.append(seq)
+            labels_out.append([class_idx[s] for s in signs])
+
+    # ── Séquences multi-signes ────────────────────────────────────────────────
     for i, sign_list in enumerate(pool):
         seq, signs = build_sequence(sign_list, templates, counters)
         seqs_out.append(seq)
@@ -150,8 +160,9 @@ def main():
     with open(OUT_PKL, 'wb') as f:
         pickle.dump(payload, f, protocol=4)
 
+    total = len(seqs_out)
     size_mb = os.path.getsize(OUT_PKL) / 1e6
-    print(f"\nSaved {N} sequences → {OUT_PKL}  ({size_mb:.0f} MB)")
+    print(f"\nSaved {total} sequences → {OUT_PKL}  ({size_mb:.0f} MB)")
 
     with open(OUT_CLASSES, 'w') as f:
         json.dump(classes, f, ensure_ascii=False, indent=2)

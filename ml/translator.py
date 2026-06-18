@@ -183,6 +183,8 @@ def rule_translate(signs_list: list) -> str:
     is_question = working and working[0] == 'comment'
     if is_question:
         working = working[1:]
+        if not working:
+            return 'Comment ?'
         subj = None
         subj_idx = -1
         for idx, t in enumerate(working):

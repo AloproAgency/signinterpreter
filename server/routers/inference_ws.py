@@ -123,26 +123,28 @@ async def inference_websocket(ws: WebSocket):
         frames  = np.stack(ctc_buf)
         decoded = ctc_eng.predict_sequence(frames)
 
-        # Only extend — never retract signs already committed during streaming.
-        # A final pass at phrase boundary will correct the full sequence.
-        if len(decoded) > len(current_signs):
-            for sign in decoded[len(current_signs):]:
+        # Déduplique les signes consécutifs identiques dans le décodage
+        deduped = [s for i, s in enumerate(decoded) if i == 0 or s != decoded[i-1]]
+        if len(deduped) > len(current_signs):
+            for sign in deduped[len(current_signs):]:
                 if not current_signs or current_signs[-1] != sign:
                     current_signs.append(sign)
                     last_sign_time = time.time()
             await _send_sentence()
 
     async def _do_finalize():
-        nonlocal current_signs, ctc_buf, ctc_stride_count
+        nonlocal current_signs, ctc_buf, ctc_stride_count, rest_streak, last_sign_time
         if not current_signs and not ctc_buf:
             return
+        rest_streak    = 0
+        last_sign_time = time.time()
 
-        # Final CTC pass on the complete phrase buffer
-        if use_ctc and ctc_buf:
+        # Final CTC pass — only if nothing was caught during streaming
+        if use_ctc and ctc_buf and not current_signs:
             frames  = np.stack(ctc_buf)
             decoded = ctc_eng.predict_sequence(frames)
             if decoded:
-                current_signs = decoded  # authoritative final decode
+                current_signs = decoded
 
         signs = list(current_signs)
         if not signs:
@@ -150,11 +152,9 @@ async def inference_websocket(ws: WebSocket):
             ctc_stride_count = 0
             return
 
-        if translator.loaded:
-            phrase = translator.translate(signs)
-            score  = _translation_confidence(translator.score_signs(signs))
-        else:
-            phrase, score = ' '.join(signs), 1.0
+        from ml.translator import rule_translate
+        phrase = rule_translate(signs)
+        score  = _translation_confidence(translator.score_signs(signs)) if translator.loaded else 1.0
 
         completed_phrases.append(phrase)
         completed_signs.append(signs)

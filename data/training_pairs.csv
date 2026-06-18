@@ -5814,3 +5814,397 @@ moi amour tu bientot,Je t'aime bientôt.
 aujourd hui moi amour tu,Aujourd'hui je t'aime.
 bonjour moi amour tu,Bonjour je t'aime !
 comment tu amour moi,Comment tu m'aimes ?
+moi boire nous,Je bois nous.
+moi aller aide,Je pars de l'aide.
+moi aller amour,Je pars de l'amour.
+moi aller bebe,Je pars le bébé.
+moi aller chat,Je pars le chat.
+moi changer nous,Je change nous.
+moi donner nous,Je donne nous.
+tu boire nous,Tu bois nous.
+tu aller aide,Tu pars de l'aide.
+tu aller amour,Tu pars de l'amour.
+tu aller bebe,Tu pars le bébé.
+tu aller chat,Tu pars le chat.
+tu changer nous,Tu changes nous.
+tu donner nous,Tu donnes nous.
+nous aller aide,Nous partons de l'aide.
+nous aller amour,Nous partons de l'amour.
+nous aller bebe,Nous partons le bébé.
+nous aller chat,Nous partons le chat.
+ami boire nous,Mon ami boit nous.
+ami aller aide,Mon ami part de l'aide.
+ami aller amour,Mon ami part de l'amour.
+ami aller bebe,Mon ami part le bébé.
+ami aller chat,Mon ami part le chat.
+ami changer nous,Mon ami change nous.
+ami donner nous,Mon ami donne nous.
+bebe boire nous,Le bébé boit nous.
+bebe aller aide,Le bébé part de l'aide.
+bebe aller amour,Le bébé part de l'amour.
+bebe aller chat,Le bébé part le chat.
+bebe changer nous,Le bébé change nous.
+bebe donner nous,Le bébé donne nous.
+chat boire nous,Le chat boit nous.
+chat aller aide,Le chat part de l'aide.
+chat aller amour,Le chat part de l'amour.
+chat aller bebe,Le chat part le bébé.
+chat changer nous,Le chat change nous.
+chat donner nous,Le chat donne nous.
+moi non boire nous,Je ne bois pas nous.
+moi non aller aide,Je ne pars pas d'aide.
+moi non aller amour,Je ne pars pas d'amour.
+moi non aller bebe,Je ne pars pas le bébé.
+moi non aller chat,Je ne pars pas le chat.
+moi non changer nous,Je ne change pas nous.
+moi non donner nous,Je ne donne pas nous.
+tu non boire nous,Tu ne bois pas nous.
+tu non aller aide,Tu ne pars pas d'aide.
+tu non aller amour,Tu ne pars pas d'amour.
+tu non aller bebe,Tu ne pars pas le bébé.
+tu non aller chat,Tu ne pars pas le chat.
+tu non changer nous,Tu ne changes pas nous.
+tu non donner nous,Tu ne donnes pas nous.
+nous non aller aide,Nous ne partons pas d'aide.
+nous non aller amour,Nous ne partons pas d'amour.
+nous non aller bebe,Nous ne partons pas le bébé.
+nous non aller chat,Nous ne partons pas le chat.
+ami non boire nous,Mon ami ne boit pas nous.
+ami non aller aide,Mon ami ne part pas d'aide.
+ami non aller amour,Mon ami ne part pas d'amour.
+ami non aller bebe,Mon ami ne part pas le bébé.
+ami non aller chat,Mon ami ne part pas le chat.
+ami non changer nous,Mon ami ne change pas nous.
+ami non donner nous,Mon ami ne donne pas nous.
+bebe non boire nous,Le bébé ne boit pas nous.
+bebe non aller aide,Le bébé ne part pas d'aide.
+bebe non aller amour,Le bébé ne part pas d'amour.
+bebe non aller chat,Le bébé ne part pas le chat.
+bebe non changer nous,Le bébé ne change pas nous.
+bebe non donner nous,Le bébé ne donne pas nous.
+chat non boire nous,Le chat ne boit pas nous.
+chat non aller aide,Le chat ne part pas d'aide.
+chat non aller amour,Le chat ne part pas d'amour.
+chat non aller bebe,Le chat ne part pas le bébé.
+chat non changer nous,Le chat ne change pas nous.
+chat non donner nous,Le chat ne donne pas nous.
+bonjour ici,Bonjour ici !
+au revoir bien,Au revoir bien !
+au revoir ici,Au revoir ici !
+merci ici,Merci ici !
+oui bebe,Oui le bébé !
+non bebe,Non le bébé !
+oui chat,Oui le chat !
+non chat,Non le chat !
+oui manger,Oui je mange !
+oui boire,Oui je bois !
+oui aller,Oui je pars !
+oui apprendre,Oui j'apprends !
+oui comprendre,Oui je comprends !
+oui changer,Oui je change !
+oui aimer,Oui j'aime !
+oui vouloir,Oui je veux !
+oui donner,Oui je donne !
+oui attendre,Oui j'attends !
+bon moi manger,Je mange bien.
+bon tu manger,Tu manges bien.
+bien nous vouloir,Nous voulons bien.
+bon nous manger,Nous mangeons bien.
+bien nous comprendre,Nous comprenons bien.
+bon ami manger,Mon ami mange bien.
+bien bebe vouloir,Le bébé veut bien.
+bon bebe manger,Le bébé mange bien.
+bien bebe comprendre,Le bébé comprend bien.
+bien chat vouloir,Le chat veut bien.
+bon chat manger,Le chat mange bien.
+bien chat comprendre,Le chat comprend bien.
+moi aller manger,Je pars.
+moi aller boire,Je pars.
+moi aller apprendre,Je pars.
+moi aller comprendre,Je pars.
+moi aller changer,Je pars.
+moi aller aimer,Je pars.
+moi aller vouloir,Je pars.
+moi aller donner,Je pars.
+moi aller attendre,Je pars.
+tu aller manger,Tu pars.
+tu aller boire,Tu pars.
+tu aller apprendre,Tu pars.
+tu aller comprendre,Tu pars.
+tu aller changer,Tu pars.
+tu aller aimer,Tu pars.
+tu aller vouloir,Tu pars.
+tu aller donner,Tu pars.
+tu aller attendre,Tu pars.
+nous aller manger,Nous partons.
+nous aller boire,Nous partons.
+nous aller apprendre,Nous partons.
+nous aller comprendre,Nous partons.
+nous aller changer,Nous partons.
+nous aller aimer,Nous partons.
+nous aller vouloir,Nous partons.
+nous aller donner,Nous partons.
+nous aller attendre,Nous partons.
+ami aller manger,Mon ami part.
+ami aller boire,Mon ami part.
+ami aller apprendre,Mon ami part.
+ami aller comprendre,Mon ami part.
+ami aller changer,Mon ami part.
+ami aller aimer,Mon ami part.
+ami aller vouloir,Mon ami part.
+ami aller donner,Mon ami part.
+ami aller attendre,Mon ami part.
+bebe aller manger,Le bébé part.
+bebe aller boire,Le bébé part.
+bebe aller apprendre,Le bébé part.
+bebe aller comprendre,Le bébé part.
+bebe aller changer,Le bébé part.
+bebe aller aimer,Le bébé part.
+bebe aller vouloir,Le bébé part.
+bebe aller donner,Le bébé part.
+bebe aller attendre,Le bébé part.
+chat aller manger,Le chat part.
+chat aller boire,Le chat part.
+chat aller apprendre,Le chat part.
+chat aller comprendre,Le chat part.
+chat aller changer,Le chat part.
+chat aller aimer,Le chat part.
+chat aller vouloir,Le chat part.
+chat aller donner,Le chat part.
+chat aller attendre,Le chat part.
+moi aller manger aide,Je pars de l'aide.
+moi aller manger ami,Je pars mon ami.
+moi aller manger amour,Je pars de l'amour.
+moi aller manger bebe,Je pars le bébé.
+moi aller boire aide,Je pars de l'aide.
+moi aller boire ami,Je pars mon ami.
+moi aller boire amour,Je pars de l'amour.
+moi aller boire bebe,Je pars le bébé.
+moi aller apprendre aide,Je pars de l'aide.
+moi aller apprendre ami,Je pars mon ami.
+moi aller apprendre amour,Je pars de l'amour.
+moi aller apprendre bebe,Je pars le bébé.
+moi aller donner aide,Je pars de l'aide.
+moi aller donner ami,Je pars mon ami.
+moi aller donner amour,Je pars de l'amour.
+moi aller donner bebe,Je pars le bébé.
+moi aller comprendre aide,Je pars de l'aide.
+moi aller comprendre ami,Je pars mon ami.
+moi aller comprendre amour,Je pars de l'amour.
+moi aller comprendre bebe,Je pars le bébé.
+tu aller manger aide,Tu pars de l'aide.
+tu aller manger ami,Tu pars mon ami.
+tu aller manger amour,Tu pars de l'amour.
+tu aller manger bebe,Tu pars le bébé.
+tu aller boire aide,Tu pars de l'aide.
+tu aller boire ami,Tu pars mon ami.
+tu aller boire amour,Tu pars de l'amour.
+tu aller boire bebe,Tu pars le bébé.
+tu aller apprendre aide,Tu pars de l'aide.
+tu aller apprendre ami,Tu pars mon ami.
+tu aller apprendre amour,Tu pars de l'amour.
+tu aller apprendre bebe,Tu pars le bébé.
+tu aller donner aide,Tu pars de l'aide.
+tu aller donner ami,Tu pars mon ami.
+tu aller donner amour,Tu pars de l'amour.
+tu aller donner bebe,Tu pars le bébé.
+tu aller comprendre aide,Tu pars de l'aide.
+tu aller comprendre ami,Tu pars mon ami.
+tu aller comprendre amour,Tu pars de l'amour.
+tu aller comprendre bebe,Tu pars le bébé.
+nous aller manger aide,Nous partons de l'aide.
+nous aller manger ami,Nous partons mon ami.
+nous aller manger amour,Nous partons de l'amour.
+nous aller manger bebe,Nous partons le bébé.
+nous aller boire aide,Nous partons de l'aide.
+nous aller boire ami,Nous partons mon ami.
+nous aller boire amour,Nous partons de l'amour.
+nous aller boire bebe,Nous partons le bébé.
+nous aller apprendre aide,Nous partons de l'aide.
+nous aller apprendre ami,Nous partons mon ami.
+nous aller apprendre amour,Nous partons de l'amour.
+nous aller apprendre bebe,Nous partons le bébé.
+nous aller donner aide,Nous partons de l'aide.
+nous aller donner ami,Nous partons mon ami.
+nous aller donner amour,Nous partons de l'amour.
+nous aller donner bebe,Nous partons le bébé.
+nous aller comprendre aide,Nous partons de l'aide.
+nous aller comprendre ami,Nous partons mon ami.
+nous aller comprendre amour,Nous partons de l'amour.
+nous aller comprendre bebe,Nous partons le bébé.
+bientot tu manger,Tu manges bientôt.
+bientot tu boire,Tu bois bientôt.
+bientot tu aller,Tu pars bientôt.
+bientot tu apprendre,Tu apprends bientôt.
+bientot tu comprendre,Tu comprends bientôt.
+bientot tu changer,Tu changes bientôt.
+bientot tu aimer,Tu aimes bientôt.
+bientot tu vouloir,Tu veux bientôt.
+bientot tu donner,Tu donnes bientôt.
+bientot tu attendre,Tu attends bientôt.
+bientot nous manger,Nous mangeons bientôt.
+bientot nous boire,Nous buvons bientôt.
+bientot nous aller,Nous partons bientôt.
+bientot nous apprendre,Nous apprenons bientôt.
+bientot nous comprendre,Nous comprenons bientôt.
+bientot nous changer,Nous changeons bientôt.
+bientot nous aimer,Nous aimons bientôt.
+bientot nous vouloir,Nous voulons bientôt.
+bientot nous donner,Nous donnons bientôt.
+bientot nous attendre,Nous attendons bientôt.
+bientot ami manger,Mon ami mange bientôt.
+bientot ami boire,Mon ami boit bientôt.
+bientot ami aller,Mon ami part bientôt.
+bientot ami apprendre,Mon ami apprend bientôt.
+bientot ami comprendre,Mon ami comprend bientôt.
+bientot ami changer,Mon ami change bientôt.
+bientot ami aimer,Mon ami aime bientôt.
+bientot ami vouloir,Mon ami veut bientôt.
+bientot ami donner,Mon ami donne bientôt.
+bientot ami attendre,Mon ami attend bientôt.
+bientot bebe manger,Le bébé mange bientôt.
+bientot bebe boire,Le bébé boit bientôt.
+bientot bebe aller,Le bébé part bientôt.
+bientot bebe apprendre,Le bébé apprend bientôt.
+bientot bebe comprendre,Le bébé comprend bientôt.
+bientot bebe changer,Le bébé change bientôt.
+bientot bebe aimer,Le bébé aime bientôt.
+bientot bebe vouloir,Le bébé veut bientôt.
+bientot bebe donner,Le bébé donne bientôt.
+bientot bebe attendre,Le bébé attend bientôt.
+bientot chat manger,Le chat mange bientôt.
+bientot chat boire,Le chat boit bientôt.
+bientot chat aller,Le chat part bientôt.
+bientot chat apprendre,Le chat apprend bientôt.
+bientot chat comprendre,Le chat comprend bientôt.
+bientot chat changer,Le chat change bientôt.
+bientot chat aimer,Le chat aime bientôt.
+bientot chat vouloir,Le chat veut bientôt.
+bientot chat donner,Le chat donne bientôt.
+bientot chat attendre,Le chat attend bientôt.
+ici tu manger,Tu manges ici.
+ici tu boire,Tu bois ici.
+ici tu aller,Tu pars ici.
+ici tu apprendre,Tu apprends ici.
+ici tu comprendre,Tu comprends ici.
+ici tu changer,Tu changes ici.
+ici tu aimer,Tu aimes ici.
+ici tu vouloir,Tu veux ici.
+ici tu donner,Tu donnes ici.
+ici tu attendre,Tu attends ici.
+ici nous manger,Nous mangeons ici.
+ici nous boire,Nous buvons ici.
+ici nous aller,Nous partons ici.
+ici nous apprendre,Nous apprenons ici.
+ici nous comprendre,Nous comprenons ici.
+ici nous changer,Nous changeons ici.
+ici nous aimer,Nous aimons ici.
+ici nous vouloir,Nous voulons ici.
+ici nous donner,Nous donnons ici.
+ici nous attendre,Nous attendons ici.
+ici ami manger,Mon ami mange ici.
+ici ami boire,Mon ami boit ici.
+ici ami aller,Mon ami part ici.
+ici ami apprendre,Mon ami apprend ici.
+ici ami comprendre,Mon ami comprend ici.
+ici ami changer,Mon ami change ici.
+ici ami aimer,Mon ami aime ici.
+ici ami vouloir,Mon ami veut ici.
+ici ami donner,Mon ami donne ici.
+ici ami attendre,Mon ami attend ici.
+ici bebe manger,Le bébé mange ici.
+ici bebe boire,Le bébé boit ici.
+ici bebe aller,Le bébé part ici.
+ici bebe apprendre,Le bébé apprend ici.
+ici bebe comprendre,Le bébé comprend ici.
+ici bebe changer,Le bébé change ici.
+ici bebe aimer,Le bébé aime ici.
+ici bebe vouloir,Le bébé veut ici.
+ici bebe donner,Le bébé donne ici.
+ici bebe attendre,Le bébé attend ici.
+ici chat manger,Le chat mange ici.
+ici chat boire,Le chat boit ici.
+ici chat aller,Le chat part ici.
+ici chat apprendre,Le chat apprend ici.
+ici chat comprendre,Le chat comprend ici.
+ici chat changer,Le chat change ici.
+ici chat aimer,Le chat aime ici.
+ici chat vouloir,Le chat veut ici.
+ici chat donner,Le chat donne ici.
+ici chat attendre,Le chat attend ici.
+moi manger aide merci,Je mange de l'aide.
+moi manger ami merci,Je mange mon ami.
+moi boire aide merci,Je bois de l'aide.
+moi boire ami merci,Je bois mon ami.
+moi aller aide merci,Je pars de l'aide.
+moi aller ami merci,Je pars mon ami.
+moi apprendre aide merci,J'apprends de l'aide.
+moi apprendre ami merci,J'apprends mon ami.
+moi comprendre aide merci,Je comprends de l'aide.
+moi comprendre ami merci,Je comprends mon ami.
+moi changer aide merci,Je change de l'aide.
+moi changer ami merci,Je change mon ami.
+moi aimer aide merci,J'aime de l'aide.
+moi aimer ami merci,J'aime mon ami.
+moi vouloir aide merci,Je veux de l'aide.
+moi vouloir ami merci,Je veux mon ami.
+moi donner aide merci,Je donne de l'aide.
+moi donner ami merci,Je donne mon ami.
+moi attendre aide merci,J'attends de l'aide.
+moi attendre ami merci,J'attends mon ami.
+tu manger aide merci,Tu manges de l'aide.
+tu manger ami merci,Tu manges mon ami.
+tu boire aide merci,Tu bois de l'aide.
+tu boire ami merci,Tu bois mon ami.
+tu aller aide merci,Tu pars de l'aide.
+tu aller ami merci,Tu pars mon ami.
+tu apprendre aide merci,Tu apprends de l'aide.
+tu apprendre ami merci,Tu apprends mon ami.
+tu comprendre aide merci,Tu comprends de l'aide.
+tu comprendre ami merci,Tu comprends mon ami.
+tu changer aide merci,Tu changes de l'aide.
+tu changer ami merci,Tu changes mon ami.
+tu aimer aide merci,Tu aimes de l'aide.
+tu aimer ami merci,Tu aimes mon ami.
+tu vouloir aide merci,Tu veux de l'aide.
+tu vouloir ami merci,Tu veux mon ami.
+tu donner aide merci,Tu donnes de l'aide.
+tu donner ami merci,Tu donnes mon ami.
+tu attendre aide merci,Tu attends de l'aide.
+tu attendre ami merci,Tu attends mon ami.
+nous manger aide merci,Nous mangeons de l'aide.
+nous manger ami merci,Nous mangeons mon ami.
+nous boire aide merci,Nous buvons de l'aide.
+nous boire ami merci,Nous buvons mon ami.
+nous aller aide merci,Nous partons de l'aide.
+nous aller ami merci,Nous partons mon ami.
+nous apprendre aide merci,Nous apprenons de l'aide.
+nous apprendre ami merci,Nous apprenons mon ami.
+nous comprendre aide merci,Nous comprenons de l'aide.
+nous comprendre ami merci,Nous comprenons mon ami.
+nous changer aide merci,Nous changeons de l'aide.
+nous changer ami merci,Nous changeons mon ami.
+nous aimer aide merci,Nous aimons de l'aide.
+nous aimer ami merci,Nous aimons mon ami.
+nous vouloir aide merci,Nous voulons de l'aide.
+nous vouloir ami merci,Nous voulons mon ami.
+nous donner aide merci,Nous donnons de l'aide.
+nous donner ami merci,Nous donnons mon ami.
+nous attendre aide merci,Nous attendons de l'aide.
+nous attendre ami merci,Nous attendons mon ami.
+oui ici,Oui ici !
+non bientot,Non bientôt !
+bien bonjour,Bien bonjour.
+bien au revoir,Bien au revoir.
+bien oui,Bien.
+bien non,Bien.
+bientot bonjour,Bientôt bonjour.
+bientot au revoir,Bientôt au revoir.
+bientot merci,Bientôt merci.
+bientot oui,Bientôt.
+bientot non,Bientôt.
+ici bonjour,Ici bonjour.
+ici au revoir,Ici au revoir.
+ici merci,Ici merci.
+ici oui,Ici.
+ici non,Ici.

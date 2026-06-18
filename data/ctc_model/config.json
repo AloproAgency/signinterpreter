@@ -4,5 +4,5 @@
   "hidden": 256,
   "n_layers": 2,
   "dropout": 0.3,
-  "best_sign_acc": 0.9992405832320778
+  "best_sign_acc": 0.999717976197191
 }

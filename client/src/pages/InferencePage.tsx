@@ -6,24 +6,21 @@ import { useMediaPipe } from '../hooks/useMediaPipe';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useApp } from '../lib/context';
 import {
-  Video, Wifi, WifiOff, Trash2, Activity,
-  Copy, Settings2, Maximize, Minimize,
-  Zap, Send, Type, Loader2, Volume2, VolumeX,
+  Video, Trash2, Copy, Settings2, Loader2,
+  Volume2, VolumeX, Send, Type, Square,
 } from 'lucide-react';
 import { api } from '../lib/api';
 
 export default function InferencePage() {
-  const { videoRef, canvasRef, active, start } = useWebcam();
+  const { videoRef, canvasRef, active, start, stop } = useWebcam();
   const { init: initMediaPipe, ready: mediaPipeReady, loading: mediaPipeLoading, processFrame } = useMediaPipe();
   const {
     connected, status, prediction, sentence, translated, translatedScore,
-    phrases, phraseSigns, phraseScores, lastAddedIndex,
+    phrases, phraseSigns, phraseScores,
     connect, disconnect, clearSentence, setThreshold, finalizeSentence,
     ctcActive,
   } = useInference(processFrame, videoRef, active, mediaPipeReady);
 
-  // Only display the French translation when we're confident enough.
-  // Otherwise fall back to the raw sign sequence so the user can still read it.
   const TRANSLATION_MIN_SCORE = 0.7;
   const { addToast } = useApp();
   const speech = useSpeech();
@@ -31,35 +28,21 @@ export default function InferencePage() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [threshold, setThresholdLocal] = useState(0.8);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [manualInput, setManualInput] = useState('');
   const [manualResult, setManualResult] = useState('');
   const [showManual, setShowManual] = useState(false);
-  const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { connect(); return () => disconnect(); }, [connect, disconnect]);
   useEffect(() => { initMediaPipe(); }, [initMediaPipe]);
 
-  // Auto-scroll transcript to bottom when new phrase arrives
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({
-      top: 0,
-      behavior: 'smooth',
-    });
-  }, [phrases.length, translated]);
-
-  // Speak each newly finalized phrase (only high-confidence ones).
   useEffect(() => {
     if (phrases.length <= lastSpokenRef.current) {
       lastSpokenRef.current = Math.min(lastSpokenRef.current, phrases.length);
       return;
     }
     const idx = phrases.length - 1;
-    const text = phrases[idx];
     const score = phraseScores[idx] ?? 0;
-    if (text && score >= TRANSLATION_MIN_SCORE) {
-      speech.speak(text);
-    }
+    if (phrases[idx] && score >= TRANSLATION_MIN_SCORE) speech.speak(phrases[idx]);
     lastSpokenRef.current = phrases.length;
   }, [phrases, phraseScores, speech]);
 
@@ -73,27 +56,15 @@ export default function InferencePage() {
     try {
       const result = await api.translate(manualInput.trim());
       setManualResult(result.sentence);
-    } catch {
-      setManualResult('Erreur de traduction');
-    }
+    } catch { setManualResult('Erreur'); }
   };
 
   const copyAll = useCallback(() => {
-    const fullText = [...phrases, translated].filter(Boolean).join('\n');
-    if (!fullText) return;
-    navigator.clipboard.writeText(fullText);
+    const text = [...phrases, translated].filter(Boolean).join('\n');
+    if (!text) return;
+    navigator.clipboard.writeText(text);
     addToast('success', 'Copié');
   }, [phrases, translated, addToast]);
-
-  const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen();
-      setIsFullscreen(false);
-    }
-  }, []);
 
   const handleClear = useCallback(() => {
     speech.cancel();
@@ -103,453 +74,303 @@ export default function InferencePage() {
 
   const shortcuts = useMemo(() => ({
     ' ': handleClear,
-    'f': toggleFullscreen,
     'Enter': finalizeSentence,
-  }), [handleClear, toggleFullscreen, finalizeSentence]);
+  }), [handleClear, finalizeSentence]);
   useKeyboardShortcuts(shortcuts);
 
-  const handleThresholdChange = (value: number) => {
-    setThresholdLocal(value);
-    setThreshold(value);
-  };
+  const handleThresholdChange = (v: number) => { setThresholdLocal(v); setThreshold(v); };
 
   const isEmpty = phrases.length === 0 && sentence.length === 0 && !translated;
+  const topK = prediction?.top_k ?? [];
+
+  /* Build the displayed text — all completed phrases + current */
+  const allText = useMemo(() => {
+    const parts: string[] = [];
+    phrases.forEach((phrase, i) => {
+      const score = phraseScores[i] ?? 0;
+      const signs = phraseSigns[i] ?? [];
+      parts.push(score >= TRANSLATION_MIN_SCORE ? phrase : signs.join(' · '));
+    });
+    return parts;
+  }, [phrases, phraseScores, phraseSigns]);
 
   return (
-    <div className="h-full flex flex-col relative bg-white dark:bg-[#0d1117]">
+    <div className="h-full relative bg-zinc-950 overflow-hidden">
 
-      {/* ============================ HEADER ============================ */}
-      <header className="shrink-0 px-4 md:px-6 py-3 border-b border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#0d1117]">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-[rgba(19,150,186,0.1)] border border-[rgba(19,150,186,0.2)] shrink-0">
-              <Activity className="w-4 h-4 text-[#1396ba]" />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-sm font-semibold text-[#1f2328] dark:text-[#e6edf3] truncate">Transcription en direct</h1>
-              <div className="flex items-center gap-1.5 text-sm text-[#8b949e] dark:text-[#484f58]">
-                <span className={`inline-flex items-center gap-1 ${connected ? 'text-[#10b981]' : ''}`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-[#10b981] animate-pulse' : 'bg-[#8b949e]'}`} />
-                  {connected ? 'Connecté' : 'Reconnexion…'}
-                </span>
-                {mediaPipeReady && <span className="text-[#1396ba]">· MediaPipe prêt</span>}
-                {connected && (
-                  <span className={`px-1.5 py-0.5 rounded text-xs font-bold tracking-wide ${
-                    ctcActive
-                      ? 'bg-[#1396ba]/15 text-[#1396ba]'
-                      : 'bg-[#8b949e]/15 text-[#8b949e]'
-                  }`}>
-                    {ctcActive ? 'CTC' : 'SW'}
-                  </span>
-                )}
-                {prediction && <span className="font-mono">· {prediction.inference_ms}ms</span>}
-              </div>
-            </div>
-          </div>
+      {/* ── Camera — full background ──────────────── */}
+      <video
+        ref={videoRef}
+        autoPlay playsInline muted
+        className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${active ? 'opacity-100' : 'opacity-0'}`}
+        style={{ filter: 'brightness(0.45) saturate(0.7)' }}
+      />
+      <canvas ref={canvasRef} className="hidden" />
 
-          <div className="flex items-center gap-1 shrink-0">
-            {speech.available && (
-              <button
-                onClick={() => speech.setEnabled(!speech.enabled)}
-                className={`p-2 rounded-md transition-colors ${speech.enabled
-                  ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
-                  : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333]'
-                }`}
-                title={speech.enabled ? 'Couper la lecture vocale' : 'Activer la lecture vocale'}
-              >
-                {speech.enabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-              </button>
-            )}
-            <button
-              onClick={copyAll}
-              disabled={isEmpty}
-              className="p-2 rounded-md text-[#656d76] dark:text-[#8b949e] hover:text-[#1396ba] hover:bg-[rgba(19,150,186,0.1)] disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Copier la transcription"
-            >
-              <Copy className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleClear}
-              disabled={isEmpty}
-              className="p-2 rounded-md text-[#656d76] dark:text-[#8b949e] hover:text-[#ef4444] hover:bg-[#ef4444]/10 disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Effacer (Espace)"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-            <div className="w-px h-5 mx-1 bg-[#d0d7de] dark:bg-[#30363d]" />
-            <button
-              onClick={() => setShowManual(v => !v)}
-              className={`p-2 rounded-md transition-colors ${showManual
-                ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
-                : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333]'
-              }`}
-              title="Tester la traduction"
-            >
-              <Type className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setShowSettings(v => !v)}
-              className={`p-2 rounded-md transition-colors ${showSettings
-                ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
-                : 'text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333]'
-              }`}
-              title="Paramètres"
-            >
-              <Settings2 className="w-4 h-4" />
-            </button>
-            <button
-              onClick={toggleFullscreen}
-              className="p-2 rounded-md hidden md:block text-[#656d76] dark:text-[#8b949e] hover:bg-[#f6f8fa] dark:hover:bg-[#1c2333]"
-              title="Plein écran (F)"
-            >
-              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
-            </button>
-          </div>
+      {/* ── Overlays ─────────────────────────────── */}
+      {/* Uniform dark base over the whole frame */}
+      <div className="absolute inset-0 bg-black/20 pointer-events-none" />
+      {/* Top fade */}
+      <div className="absolute inset-x-0 top-0 h-40 bg-linear-to-b from-black/70 to-transparent pointer-events-none" />
+      {/* Bottom gradient — covers ~65% */}
+      <div className="absolute inset-x-0 bottom-0 h-[65%] bg-linear-to-t from-black/95 via-black/60 to-transparent pointer-events-none" />
+
+      {/* ── Idle — start button ───────────────────── */}
+      {!active && (
+        <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4">
+          <button
+            onClick={handleStart}
+            disabled={mediaPipeLoading}
+            className="group cursor-pointer disabled:cursor-wait flex flex-col items-center gap-3"
+          >
+            <div className="w-24 h-24 rounded-full border-2 border-white/20 bg-white/8 backdrop-blur-sm flex items-center justify-center group-hover:bg-white/15 group-hover:border-white/35 transition-all duration-300">
+              {mediaPipeLoading
+                ? <Loader2 className="w-9 h-9 text-white animate-spin" />
+                : <Video className="w-9 h-9 text-white ml-1" />
+              }
+            </div>
+            <span className="text-sm text-white/40 group-hover:text-white/70 transition-colors tracking-wide">
+              {mediaPipeLoading ? 'Chargement…' : 'Activer la caméra'}
+            </span>
+          </button>
         </div>
-      </header>
-
-      {/* Settings popover */}
-      {showSettings && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setShowSettings(false)} />
-          <div className="absolute right-6 top-16 z-50 w-80 rounded-lg border border-[#d0d7de] dark:border-[#30363d] bg-white dark:bg-[#161b22] shadow-2xl animate-scale-in">
-            <div className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-sm font-medium text-[#1f2328] dark:text-[#e6edf3]">Seuil de confiance</label>
-                <span className="text-base font-mono font-bold text-[#1396ba]">{threshold.toFixed(2)}</span>
-              </div>
-              <input
-                type="range" min={0.1} max={3.0} step={0.05}
-                value={threshold}
-                onChange={e => handleThresholdChange(Number(e.target.value))}
-                className="w-full h-2 rounded-full appearance-none cursor-pointer"
-                style={{
-                  background: `linear-gradient(to right, #1396ba 0%, #1396ba ${(threshold - 0.1) / 2.9 * 100}%, ${
-                    document.documentElement.classList.contains('dark') ? '#30363d' : '#d0d7de'
-                  } ${(threshold - 0.1) / 2.9 * 100}%, ${
-                    document.documentElement.classList.contains('dark') ? '#30363d' : '#d0d7de'
-                  } 100%)`
-                }}
-              />
-              <div className="flex justify-between mt-1.5 text-sm text-[#8b949e]">
-                <span>Strict</span><span>Permissif</span>
-              </div>
-            </div>
-            <div className="border-t border-[#d0d7de] dark:border-[#30363d] px-4 py-2.5 flex gap-4 text-sm text-[#8b949e]">
-              <span><kbd className="px-1.5 py-0.5 rounded bg-[#f6f8fa] dark:bg-[#0d1117] border border-[#d0d7de] dark:border-[#30363d] font-mono">↵</kbd> Fin de phrase</span>
-              <span><kbd className="px-1.5 py-0.5 rounded bg-[#f6f8fa] dark:bg-[#0d1117] border border-[#d0d7de] dark:border-[#30363d] font-mono">⎵</kbd> Effacer</span>
-              <span><kbd className="px-1.5 py-0.5 rounded bg-[#f6f8fa] dark:bg-[#0d1117] border border-[#d0d7de] dark:border-[#30363d] font-mono">F</kbd> Plein écran</span>
-            </div>
-          </div>
-        </>
       )}
 
-      {/* Manual translation */}
+      {/* ── Top bar ──────────────────────────────── */}
+      <div className="absolute top-0 left-0 right-0 z-30 flex items-center gap-2 px-5 pt-5">
+
+        {/* Status pill */}
+        <div className="flex items-center gap-2 bg-black/30 backdrop-blur-md rounded-full px-3 py-1.5 border border-white/10">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
+          <span className="text-[11px] font-mono text-white/60 tracking-wide">
+            {connected ? (ctcActive ? 'CTC' : 'SW') : 'offline'}
+          </span>
+          {prediction && (
+            <span className="text-[10px] font-mono text-white/30 border-l border-white/15 pl-2">
+              {prediction.inference_ms}ms
+            </span>
+          )}
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Icon buttons — pill group */}
+        <div className="flex items-center gap-1">
+          {speech.available && (
+            <button
+              onClick={() => speech.setEnabled(!speech.enabled)}
+              className={`w-9 h-9 rounded-full backdrop-blur-md flex items-center justify-center transition-all cursor-pointer border ${
+                speech.enabled
+                  ? 'bg-white/20 border-white/20 text-white'
+                  : 'bg-black/25 border-white/10 text-white/40 hover:bg-white/15 hover:text-white/80'
+              }`}
+            >
+              {speech.enabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+            </button>
+          )}
+          <button
+            onClick={() => setShowManual(v => !v)}
+            className={`w-9 h-9 rounded-full backdrop-blur-md flex items-center justify-center transition-all cursor-pointer border ${
+              showManual
+                ? 'bg-white/20 border-white/20 text-white'
+                : 'bg-black/25 border-white/10 text-white/40 hover:bg-white/15 hover:text-white/80'
+            }`}
+          >
+            <Type className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowSettings(v => !v)}
+            className={`w-9 h-9 rounded-full backdrop-blur-md flex items-center justify-center transition-all cursor-pointer border ${
+              showSettings
+                ? 'bg-white/20 border-white/20 text-white'
+                : 'bg-black/25 border-white/10 text-white/40 hover:bg-white/15 hover:text-white/80'
+            }`}
+          >
+            <Settings2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Top-K predictions (top-right, under bar) ── */}
+      {active && topK.length > 0 && (
+        <div className="absolute right-5 top-18 z-20 space-y-0.5">
+          {topK.slice(0, 4).map((alt, i) => {
+            const p = Math.round(Math.exp(-alt.distance) * 100);
+            return (
+              <div key={alt.word} className={`flex items-center gap-2 px-2.5 py-1 rounded-lg ${i === 0 ? 'bg-white/12 backdrop-blur-sm' : ''}`}>
+                <span className={`text-xs font-mono ${i === 0 ? 'text-white font-semibold' : 'text-white/25'}`}>{alt.word}</span>
+                <span className={`text-[10px] font-mono ml-auto ${i === 0 ? 'text-white/50' : 'text-white/15'}`}>{p}%</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Manual translate ──────────────────────── */}
       {showManual && (
-        <div className="shrink-0 px-4 md:px-6 py-3 border-b border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22] animate-slide-up">
-          <div className="flex gap-2 items-center max-w-2xl">
+        <div className="absolute left-5 right-5 top-18 z-30 animate-slide-up">
+          <div className="flex gap-2">
             <input
               type="text"
               value={manualInput}
               onChange={e => setManualInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleManualTranslate()}
-              placeholder="Tapez des signes : moi manger pomme"
-              className="flex-1 rounded-md px-3 py-2 text-sm bg-white dark:bg-[#0d1117] border border-[#d0d7de] dark:border-[#30363d] text-[#1f2328] dark:text-[#e6edf3] placeholder-[#8b949e] focus:outline-none focus:border-[#1396ba] focus:ring-1 focus:ring-[#1396ba]/30"
+              placeholder="moi manger pomme…"
+              className="flex-1 px-3 py-2 text-sm bg-black/40 backdrop-blur-md border border-white/15 rounded-xl text-white placeholder-white/25 focus:outline-none focus:ring-1 focus:ring-white/30"
             />
             <button
               onClick={handleManualTranslate}
-              className="px-4 py-2 rounded-md text-sm font-medium bg-[#1396ba] hover:bg-[#17b8e3] text-white cursor-pointer flex items-center gap-1.5"
+              className="px-4 py-2 bg-white/12 hover:bg-white/20 backdrop-blur-md border border-white/15 text-white rounded-xl cursor-pointer transition-all"
             >
-              <Send className="w-3.5 h-3.5" />
-              Traduire
+              <Send className="w-4 h-4" />
             </button>
           </div>
           {manualResult && (
-            <p className="mt-2 text-base font-medium text-[#1f2328] dark:text-[#e6edf3]">→ {manualResult}</p>
+            <p className="mt-2 text-sm text-white/50 pl-1">→ <span className="text-white font-medium">{manualResult}</span></p>
           )}
         </div>
       )}
 
-      {/* ============================ MAIN ============================ */}
-      <main className="flex-1 min-h-0 flex flex-col lg:flex-row">
+      {/* ── Transcript — teleprompter text block ─────── */}
+      <div className="absolute inset-x-0 z-20 flex flex-col items-center justify-end text-center px-8 overflow-hidden" style={{ top: '10%', bottom: '148px' }}>
 
-        {/* Transcript — primary focus */}
-        <section className="flex-1 min-h-0 flex flex-col border-b lg:border-b-0 lg:border-r border-[#d0d7de] dark:border-[#30363d]">
-          <div
-            ref={transcriptRef}
-            className="flex-1 min-h-0 overflow-y-auto px-6 md:px-10 py-8"
-          >
-            {isEmpty ? (
-              <div className="h-full flex flex-col items-center justify-center text-center">
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center bg-[rgba(19,150,186,0.08)] border border-[rgba(19,150,186,0.15)] mb-5">
-                  <Activity className="w-7 h-7 text-[#1396ba]" />
-                </div>
-                <h2 className="text-lg font-semibold text-[#1f2328] dark:text-[#e6edf3] mb-1.5">
-                  Prêt à transcrire
-                </h2>
-                <p className="text-sm text-[#8b949e] dark:text-[#484f58] max-w-sm">
-                  {active
-                    ? 'Signez devant la caméra pour voir la transcription apparaître ici.'
-                    : 'Activez la caméra pour commencer.'}
-                </p>
-              </div>
-            ) : (
-              <div className="max-w-2xl mx-auto flex flex-col divide-y divide-[#d0d7de]/60 dark:divide-[#30363d]/60">
-                {/* Current (in-progress) phrase — always on top */}
-                {(sentence.length > 0 || translated) && (
-                  <article className="animate-fade-in py-4 first:pt-0">
-                    <div className="flex items-baseline gap-3">
-                      <span className="text-sm font-mono text-[#1396ba] tabular-nums shrink-0">
-                        {String(phrases.length + 1).padStart(2, '0')}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        {translated && translatedScore >= TRANSLATION_MIN_SCORE ? (
-                          // Traduction confiante → phrase française en gros + pills en dessous
-                          <>
-                            <p className="text-xl md:text-2xl leading-relaxed text-[#1396ba] font-semibold flex items-baseline gap-2">
-                              <span className="min-w-0">{translated}</span>
-                              <span className="inline-block w-0.5 h-5 bg-[#1396ba] animate-pulse align-[-0.1em]" />
-                              <span
-                                className="text-sm font-mono font-semibold tabular-nums px-1.5 py-0.5 rounded shrink-0 text-[#10b981] bg-[#10b981]/10"
-                                title="Confiance de la traduction"
-                              >
-                                {Math.round(translatedScore * 100)}%
-                              </span>
-                            </p>
-                            {sentence.length > 0 && (
-                              <div className="flex gap-1.5 mt-2 flex-wrap">
-                                {sentence.map((word, i) => (
-                                  <span
-                                    key={`${i}-${word}`}
-                                    className={`px-2 py-0.5 rounded text-sm text-[#656d76] dark:text-[#8b949e] bg-[#f6f8fa] dark:bg-[#1c2333] border border-[#d0d7de] dark:border-[#30363d] ${
-                                      i === lastAddedIndex ? 'animate-word-pop' : ''
-                                    }`}
-                                  >
-                                    {word}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          // Traduction absente ou peu fiable → on montre la séquence de signes.
-                          sentence.length > 0 && (
-                            <p className="text-xl md:text-2xl leading-relaxed text-[#1396ba] font-semibold flex gap-2 flex-wrap items-baseline">
-                              {sentence.map((word, i) => (
-                                <span
-                                  key={`${i}-${word}`}
-                                  className={i === lastAddedIndex ? 'animate-word-pop' : ''}
-                                >
-                                  {word}
-                                </span>
-                              ))}
-                              <span className="inline-block w-0.5 h-5 bg-[#1396ba] animate-pulse align-[-0.1em]" />
-                              {translated && translatedScore > 0 && (
-                                <span
-                                  className={`text-sm font-mono font-semibold tabular-nums px-1.5 py-0.5 rounded shrink-0 ${
-                                    translatedScore >= 0.4 ? 'text-[#d97706] bg-[#d97706]/10' : 'text-[#ef4444] bg-[#ef4444]/10'
-                                  }`}
-                                  title="Traduction masquée — confiance trop basse"
-                                >
-                                  {Math.round(translatedScore * 100)}%
-                                </span>
-                              )}
-                            </p>
-                          )
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                )}
+        {!isEmpty ? (
+          <div className="w-full space-y-4">
 
-                {/* Completed phrases — newest first */}
-                {[...phrases].map((_, reverseIdx, arr) => {
-                  const i = arr.length - 1 - reverseIdx;
-                  const phrase = phrases[i];
-                  const s = phraseScores[i] ?? 0;
-                  const signs = phraseSigns[i] ?? [];
-                  const isConfident = s >= TRANSLATION_MIN_SCORE;
-                  const pct = Math.round(s * 100);
-                  const tone = s >= 0.7 ? 'text-[#10b981] bg-[#10b981]/10'
-                    : s >= 0.4 ? 'text-[#d97706] bg-[#d97706]/10'
-                    : 'text-[#ef4444] bg-[#ef4444]/10';
-                  return (
-                    <article
-                      key={`phrase-${i}`}
-                      className="group animate-fade-in py-4 first:pt-0"
-                    >
-                      <div className="flex items-baseline gap-3">
-                        <span className="text-sm font-mono text-[#8b949e] dark:text-[#484f58] tabular-nums shrink-0">
-                          {String(i + 1).padStart(2, '0')}
-                        </span>
-                        {isConfident ? (
-                          <p className="text-xl md:text-2xl leading-relaxed text-[#1f2328] dark:text-[#e6edf3] font-medium flex-1 wrap-break-word">
-                            {phrase}
-                          </p>
-                        ) : (
-                          <p className="text-xl md:text-2xl leading-relaxed text-[#656d76] dark:text-[#8b949e] font-medium flex-1 italic wrap-break-word">
-                            {signs.length > 0 ? signs.join(' · ') : phrase}
-                          </p>
-                        )}
-                        <span
-                          className={`text-sm font-mono font-semibold tabular-nums px-1.5 py-0.5 rounded shrink-0 ${tone}`}
-                          title={isConfident ? 'Confiance de la traduction' : 'Confiance trop basse — séquence de signes affichée'}
-                        >
-                          {pct}%
-                        </span>
-                      </div>
-                    </article>
-                  );
-                })}
+            {/* Show only last 2 completed phrases to avoid overflow */}
+            {allText.slice(-2).map((text, i) => (
+              <p
+                key={`phrase-${i}`}
+                className="text-white text-5xl md:text-6xl font-bold leading-tight tracking-tight animate-fade-in"
+              >
+                {text}
+              </p>
+            ))}
+
+            {/* Current in-progress phrase */}
+            {(sentence.length > 0 || translated) && (
+              <div className="animate-fade-in">
+                {/* Translation or signs — same size/color */}
+                {translated && translatedScore >= TRANSLATION_MIN_SCORE ? (
+                  <p className="text-blue-400 text-5xl md:text-6xl font-bold leading-tight tracking-tight">
+                    {translated}
+                    <span className="inline-block w-0.5 h-11 bg-blue-400 ml-2 animate-pulse align-middle rounded-full" />
+                  </p>
+                ) : sentence.length > 0 ? (
+                  <p className="text-blue-400 text-5xl md:text-6xl font-bold leading-tight tracking-tight">
+                    {sentence.join(' · ')}
+                    <span className="inline-block w-0.5 h-11 bg-blue-400 ml-2 animate-pulse align-middle rounded-full" />
+                  </p>
+                ) : null}
               </div>
             )}
-          </div>
 
-          {/* Live prediction strip — hidden when hand is not visible */}
-          {active && prediction && status.hand_visible && (
-            <div className="shrink-0 px-6 md:px-10 py-3 border-t border-[#d0d7de] dark:border-[#30363d] bg-[#f6f8fa] dark:bg-[#161b22]">
-              <div className="max-w-2xl mx-auto flex items-center gap-3">
-                <span className="text-sm uppercase tracking-wider font-semibold text-[#8b949e]">
-                  En cours
-                </span>
-                <span className={`text-base font-semibold ${
-                  prediction.is_final ? 'text-[#1396ba]' : 'text-[#1f2328] dark:text-[#e6edf3]'
-                }`}>
-                  {prediction.word || '—'}
-                </span>
-                <div className="flex-1 h-1 rounded-full overflow-hidden bg-[#d0d7de] dark:bg-[#30363d] max-w-[160px]">
-                  <div
-                    className="h-full rounded-full bg-[#1396ba] transition-all duration-300"
-                    style={{ width: `${Math.max(0, Math.min(100, prediction.confidence * 100))}%` }}
-                  />
-                </div>
-                <span className="text-sm font-mono font-bold text-[#8b949e] tabular-nums min-w-[3ch] text-right">
-                  {Math.round(prediction.confidence * 100)}%
-                </span>
-              </div>
-              {/* Ambiguity strip: if top-1 is uncertain (<75%) AND top-2
-                  is close (dist gap small), show the next 2 candidates
-                  for the user to know the model is hesitating. */}
-              {(() => {
-                const tk = prediction.top_k ?? [];
-                if (tk.length < 2) return null;
-                const top1 = Math.exp(-tk[0].distance);
-                const top2 = Math.exp(-tk[1].distance);
-                const ambiguous = top1 < 0.75 && (top1 - top2) < 0.15;
-                if (!ambiguous) return null;
-                return (
-                  <div className="max-w-2xl mx-auto mt-2 flex items-center gap-2 text-xs">
-                    <span className="text-[#8b949e] uppercase tracking-wider">Aussi possible</span>
-                    {tk.slice(1, 4).map((alt) => {
-                      const p = Math.exp(-alt.distance);
-                      return (
-                        <span
-                          key={alt.word}
-                          className="px-2 py-0.5 rounded-full bg-[#d0d7de]/40 dark:bg-[#30363d]/60 text-[#1f2328] dark:text-[#e6edf3]"
-                        >
-                          {alt.word} <span className="text-[#8b949e] font-mono">{Math.round(p * 100)}%</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
+          </div>
+        ) : active ? (
+          <div className="flex-1 flex items-center justify-center">
+            <p className="text-white/20 text-3xl font-medium tracking-wide">Signez pour transcrire…</p>
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── Live prediction + dots (centered, above buttons) ── */}
+      <div className="absolute left-0 right-0 z-30 flex flex-col items-center gap-3" style={{ bottom: '72px' }}>
+
+        {/* Recording indicator */}
+        {active && prediction && status.hand_visible && (
+          <div className="flex items-center gap-2.5 bg-black/30 backdrop-blur-md rounded-full px-4 py-1.5 border border-white/10">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+            <span className="text-sm font-mono text-white/65 tabular-nums tracking-wide">{prediction.word || '—'}</span>
+            <div className="w-16 h-0.5 bg-white/15 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-white/50 rounded-full transition-all duration-150"
+                style={{ width: `${Math.round(prediction.confidence * 100)}%` }}
+              />
             </div>
+          </div>
+        )}
+
+        {/* Mediapipe dots */}
+        {active && (
+          <div className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${mediaPipeReady ? 'bg-blue-400' : 'bg-white/15'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${status.hand_visible ? 'bg-emerald-400 animate-pulse' : 'bg-white/15'}`} />
+          </div>
+        )}
+      </div>
+
+      {/* ── Bottom 3 action buttons ───────────────── */}
+      <div className="absolute bottom-0 left-0 right-0 z-30 flex items-center justify-center gap-8 pb-9">
+
+        {/* Left — Copy (small) */}
+        <button
+          onClick={copyAll}
+          disabled={isEmpty}
+          className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/15 flex items-center justify-center text-white/60 hover:bg-white/20 hover:text-white transition-all cursor-pointer disabled:opacity-20"
+        >
+          <Copy className="w-5 h-5" />
+        </button>
+
+        {/* Center — Start/Stop dynamique */}
+        <button
+          onClick={active ? stop : handleStart}
+          disabled={mediaPipeLoading}
+          className={`w-18 h-18 rounded-full border-2 flex items-center justify-center active:scale-95 transition-all duration-300 cursor-pointer disabled:opacity-40 shadow-2xl ${
+            !active
+              ? 'bg-white/15 backdrop-blur-md border-white/30 text-white hover:bg-white/25'
+              : status.hand_visible
+              ? 'bg-red-500 border-red-400 text-white shadow-red-500/40'
+              : 'bg-white/15 backdrop-blur-md border-white/30 text-white hover:bg-white/25'
+          }`}
+        >
+          {mediaPipeLoading ? (
+            <Loader2 className="w-7 h-7 animate-spin" />
+          ) : !active ? (
+            <Video className="w-7 h-7" />
+          ) : status.hand_visible ? (
+            /* Recording indicator — pulsing red dot */
+            <span className="w-5 h-5 rounded-full bg-white animate-pulse" />
+          ) : (
+            <Square className="w-6 h-6 fill-white" />
           )}
-        </section>
+        </button>
 
-        {/* Video — secondary, compact */}
-        <aside className="shrink-0 w-full lg:w-72 xl:w-80 p-4 lg:p-5 flex flex-col gap-3 bg-[#f6f8fa] dark:bg-[#161b22]">
-          <div className={`relative rounded-xl overflow-hidden aspect-square border-2 transition-colors ${
-            active && status.is_signing
-              ? 'border-[#1396ba] shadow-[0_0_0_3px_rgba(19,150,186,0.15)]'
-              : 'border-[#d0d7de] dark:border-[#30363d]'
-          }`}>
-            <video
-              ref={videoRef}
-              autoPlay playsInline muted
-              className="w-full h-full object-cover"
-            />
-            <canvas ref={canvasRef} className="hidden" />
+        {/* Right — Clear */}
+        <button
+          onClick={handleClear}
+          disabled={isEmpty}
+          className="w-12 h-12 rounded-full bg-white/10 backdrop-blur-md border border-white/15 flex items-center justify-center text-white/60 hover:bg-white/20 hover:text-white transition-all cursor-pointer disabled:opacity-20"
+        >
+          <Trash2 className="w-5 h-5" />
+        </button>
+      </div>
 
-            {active && (
-              <>
-                {/* Top-left : hand status */}
-                <div className="absolute top-2 left-2">
-                  <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-sm px-2 py-1 rounded-md text-sm font-medium text-white/90">
-                    <div className={`w-1.5 h-1.5 rounded-full ${
-                      status.hand_visible ? 'bg-[#10b981] animate-pulse' : 'bg-[#484f58]'
-                    }`} />
-                    {status.hand_visible ? 'Main' : 'Pas de main'}
-                  </div>
-                </div>
-
-                {/* Top-right : REC */}
-                {status.is_signing && (
-                  <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-[#ef4444]/90 backdrop-blur-sm px-2 py-1 rounded-md">
-                    <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                    <span className="text-white text-sm font-bold tracking-wider">REC</span>
-                  </div>
-                )}
-
-                {/* Bottom : motion bar */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 via-black/40 to-transparent px-3 pt-5 pb-2">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Zap className={`w-3 h-3 ${
-                      status.motion_energy > 0.05 ? 'text-[#1396ba]' : 'text-white/40'
-                    }`} />
-                    <div className="flex-1 h-1 rounded-full overflow-hidden bg-white/15">
-                      <div
-                        className="h-full rounded-full bg-[#1396ba] transition-all duration-150 ease-out"
-                        style={{ width: `${Math.min(100, status.motion_energy * 1000)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {/* Start overlay */}
-            {!active && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/75 backdrop-blur-sm">
-                <button
-                  onClick={handleStart}
-                  disabled={mediaPipeLoading}
-                  className="bg-[#1396ba] hover:bg-[#17b8e3] disabled:opacity-60 disabled:cursor-wait text-white px-4 py-2.5 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors cursor-pointer shadow-lg"
-                >
-                  {mediaPipeLoading ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" />Chargement…</>
-                  ) : (
-                    <><Video className="w-4 h-4" />Activer la caméra</>
-                  )}
-                </button>
+      {/* ── Settings popover ─────────────────────── */}
+      {showSettings && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setShowSettings(false)} />
+          <div className="fixed right-4 top-16 z-50 w-72 bg-zinc-950/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl animate-scale-in overflow-hidden">
+            <div className="px-5 py-4 border-b border-white/8">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-sm font-semibold text-white">Seuil de confiance</span>
+                <span className="text-sm font-mono font-bold text-blue-400">{threshold.toFixed(2)}</span>
               </div>
-            )}
-          </div>
-
-          {/* Compact status line below video */}
-          <div className="flex items-center justify-between text-sm">
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md ${
-              connected
-                ? 'text-[#10b981] bg-[#10b981]/10'
-                : 'text-[#8b949e] bg-[#8b949e]/10'
-            }`}>
-              {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              <span>{connected ? 'Serveur' : 'Hors-ligne'}</span>
+              <input
+                type="range" min={0.1} max={3.0} step={0.05}
+                value={threshold}
+                onChange={e => handleThresholdChange(Number(e.target.value))}
+                className="w-full cursor-pointer"
+              />
+              <div className="flex justify-between mt-2 text-xs text-white/30">
+                <span>strict</span><span>permissif</span>
+              </div>
             </div>
-            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md ${
-              mediaPipeReady
-                ? 'text-[#1396ba] bg-[rgba(19,150,186,0.1)]'
-                : 'text-[#8b949e] bg-[#8b949e]/10'
-            }`}>
-              {mediaPipeReady
-                ? <div className="w-1.5 h-1.5 rounded-full bg-[#1396ba]" />
-                : <Loader2 className="w-3 h-3 animate-spin" />}
-              <span>MediaPipe</span>
+            <div className="px-5 py-4 grid grid-cols-2 gap-2 text-xs text-white/35 text-center">
+              <div><kbd className="block font-mono bg-white/8 px-2 py-1 rounded-lg border border-white/10 mb-1">↵</kbd>phrase</div>
+              <div><kbd className="block font-mono bg-white/8 px-2 py-1 rounded-lg border border-white/10 mb-1">⎵</kbd>effacer</div>
             </div>
           </div>
-        </aside>
-      </main>
+        </>
+      )}
     </div>
   );
 }
